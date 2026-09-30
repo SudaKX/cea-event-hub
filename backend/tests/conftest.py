@@ -121,32 +121,39 @@ def admin_id(test_db: Database) -> int:
 
 
 @pytest.fixture
-def admin_client(client, admin_id: int):
-    """已登录管理员的客户端。"""
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
-    )
-    assert response.status_code == 200, response.text
-    return client
+def admin_client(app, admin_id: int):
+    """已登录管理员的客户端。
+
+    **每个身份一个独立的 TestClient。** 共用一个实例的话，各夹具的登录会互相
+    覆盖 Cookie——表现为"管理员突然变成普通用户"，而且症状取决于夹具的执行
+    顺序，极难排查。
+    """
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/v1/auth/login",
+            json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+        )
+        assert response.status_code == 200, response.text
+        yield test_client
 
 
 @pytest.fixture
-def user_client(client, test_db: Database):
-    """已登录普通用户的客户端。"""
-    response = client.post(
-        "/api/v1/auth/register",
-        json={"username": "alice", "password": "correct-horse"},
-    )
-    assert response.status_code == 201, response.text
-    assert (
-        client.post(
-            "/api/v1/auth/login",
+def user_client(app, test_db: Database):
+    """已登录普通用户的客户端（独立实例，见 admin_client 的说明）。"""
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/v1/auth/register",
             json={"username": "alice", "password": "correct-horse"},
-        ).status_code
-        == 200
-    )
-    return client
+        )
+        assert response.status_code == 201, response.text
+        assert (
+            test_client.post(
+                "/api/v1/auth/login",
+                json={"username": "alice", "password": "correct-horse"},
+            ).status_code
+            == 200
+        )
+        yield test_client
 
 
 @pytest.fixture

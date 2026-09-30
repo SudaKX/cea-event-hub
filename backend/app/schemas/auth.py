@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas import UserPublic
 
@@ -61,6 +61,42 @@ class ResetTokenResponse(BaseModel):
     expires_at: datetime
 
 
+class UserAdminPublic(UserPublic):
+    """管理端用户视图。
+
+    比公开视图多出启用状态与创建时间，但**同样不含**口令哈希、重置凭据或
+    会话凭据——把它们加进来是最容易发生的泄露方式。
+    """
+
+    is_active: bool
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, user) -> "UserAdminPublic":  # noqa: ANN001
+        return cls(
+            **UserPublic.from_model(user).model_dump(),
+            is_active=user.is_active,
+            created_at=user.created_at,
+        )
+
+
+class UserUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str | None = None
+    is_active: bool | None = None
+    display_name: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class UserListResponse(BaseModel):
+    users: list[UserAdminPublic]
+    total: int
+
+
+class UserAdminEnvelope(BaseModel):
+    user: UserAdminPublic
+
+
 __all__ = [
     "ChangePasswordRequest",
     "ForgotPasswordRequest",
@@ -69,5 +105,9 @@ __all__ = [
     "ResetPasswordRequest",
     "ResetTokenResponse",
     "TokenRequest",
+    "UserAdminEnvelope",
+    "UserAdminPublic",
     "UserEnvelope",
+    "UserListResponse",
+    "UserUpdateRequest",
 ]

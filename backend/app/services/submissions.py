@@ -322,6 +322,96 @@ class SubmissionService:
             return
         raise NotFound("附件不存在")
 
+    # ------------------------------------------------------------------
+    # 审核与清理（管理端）
+    # ------------------------------------------------------------------
+
+    def review(
+        self,
+        session: Session,
+        *,
+        submission_id: int,
+        status_value: str,
+        actor: User,
+    ) -> Submission:
+        from app.core.exceptions import NotFound
+
+        if status_value not in {s.value for s in SubmissionStatus}:
+            raise ValidationFailed(fields={"status": "状态取值不合法"})
+
+        submission = self.submissions.get(session, submission_id)
+        if submission is None:
+            raise NotFound("提交不存在")
+
+        submission.status = status_value
+        submission.reviewed_at = utcnow()
+        submission.reviewed_by = actor.id
+        return submission
+
+    def delete_submission(self, session: Session, *, submission_id: int) -> Submission:
+        """删除一条提交，并在**同一事务内**释放它占用的名额。
+
+        递减不能省：满额活动上"删一条腾一个名额"是管理员唯一的自救手段，
+        不递减会让活动被永久锁死且无法通过界面恢复。
+        """
+        from app.core.exceptions import NotFound
+        from app.core.deps import register_after_commit
+
+        submission = self.submissions.get(session, submission_id)
+        if submission is None:
+            raise NotFound("提交不存在")
+
+        event_id = submission.event_id
+        records = self.files.list_for_submission(session, submission_id)
+
+        # 字节在事务外删除，且只在提交成功后执行——先删字节再提交的话，
+        # 一旦回滚就会留下指向不存在文件的记录
+        for record in records:
+            register_after_commit(
+                session,
+                lambda event=record.event_id, rel=record.stored_rel: self.storage.delete(
+                    event, rel
+                ),
+            )
+
+        self.events.release_submission_slot(session, event_id)
+        session.delete(submission)
+        return submission
+
+    def delete_many(self, session: Session, *, submission_ids: Sequence[int]) -> int:
+        """批量删除。
+
+        这是罕见路径，因此删完直接按实际行数**重算**该活动的计数，而不是逐条
+        递减——重算顺便成为计数器唯一需要的自愈入口。
+        """
+        from app.core.deps import register_after_commit
+
+        if not submission_ids:
+            return 0
+
+        touched_events: set[str] = set()
+        deleted = 0
+
+        for submission_id in submission_ids:
+            submission = self.submissions.get(session, submission_id)
+            if submission is None:
+                continue
+            touched_events.add(submission.event_id)
+            for record in self.files.list_for_submission(session, submission_id):
+                register_after_commit(
+                    session,
+                    lambda event=record.event_id, rel=record.stored_rel: self.storage.delete(
+                        event, rel
+                    ),
+                )
+            session.delete(submission)
+            deleted += 1
+
+        session.flush()
+        for event_id in touched_events:
+            self.events.recompute_submission_count(session, event_id)
+        return deleted
+
     def attachment_mime(self, record: SubmissionFile) -> str:
         """由字节嗅探得出，不采信客户端声明的类型。
 

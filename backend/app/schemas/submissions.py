@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db.models import Submission, SubmissionFile
 
@@ -32,6 +32,10 @@ class SubmissionPublic(BaseModel):
     files: list[SubmissionFilePublic] = []
 
 
+class SubmissionEnvelope(BaseModel):
+    submission: SubmissionPublic
+
+
 class SubmissionCreated(BaseModel):
     """创建结果。
 
@@ -45,10 +49,17 @@ class SubmissionCreated(BaseModel):
 
 class SubmissionListResponse(BaseModel):
     submissions: list[SubmissionPublic]
+    #: 管理端分页时给出总数；"我的提交"不翻页，保持为 0
+    total: int = 0
 
 
 class SubmissionReviewRequest(BaseModel):
     status: str
+
+
+class BatchDeleteRequest(BaseModel):
+    # 上限存在的意义是让一次请求的代价可预期，而不是安全边界
+    ids: list[int] = Field(min_length=1, max_length=500)
 
 
 def file_to_public(record: SubmissionFile, mime: str | None = None) -> SubmissionFilePublic:
@@ -81,7 +92,9 @@ def submission_to_public(
 
 
 __all__ = [
+    "BatchDeleteRequest",
     "SubmissionCreated",
+    "SubmissionEnvelope",
     "SubmissionFilePublic",
     "SubmissionListResponse",
     "SubmissionPublic",

@@ -7,12 +7,37 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
+from sqlalchemy import func, select
 
-from app.core.deps import AdminUser, DbSession, RuntimeSettings, require_admin
+from app.core.deps import (
+    AdminUser,
+    DbSession,
+    FileStorageDep,
+    RuntimeSettings,
+    require_admin,
+)
 from app.core.exceptions import NotFound
-from app.schemas.auth import ResetTokenResponse
+from app.repositories import paginate
+from app.repositories.users import UserRepository
+from app.schemas.auth import (
+    ResetTokenResponse,
+    UserAdminEnvelope,
+    UserAdminPublic,
+    UserListResponse,
+    UserUpdateRequest,
+)
 from app.schemas.content import (
     ContentDeployResponse,
     ContentFileItem,
@@ -25,15 +50,40 @@ from app.schemas.events import (
     EventUpdateRequest,
     to_admin,
 )
+from app.schemas.submissions import (
+    BatchDeleteRequest,
+    SubmissionEnvelope,
+    SubmissionListResponse,
+    SubmissionReviewRequest,
+    file_to_public,
+    submission_to_public,
+)
 from app.services.auth import AuthService
 from app.services.content import ContentService
 from app.services.events import EventService
+from app.services.submissions import SubmissionService
 
 router = APIRouter(
     prefix="/admin",
     tags=["admin"],
     dependencies=[Depends(require_admin)],
 )
+
+
+def _submission_service(settings, storage) -> SubmissionService:
+    return SubmissionService(settings, storage)
+
+
+def _render_submission(session, submission, service: SubmissionService):
+    """管理端视图：附件的类型由**字节嗅探**得出，不采信客户端声明。"""
+    records = service.files.list_for_submission(session, submission.id)
+    return submission_to_public(
+        submission,
+        files=[
+            file_to_public(record, service.attachment_mime(record))
+            for record in records
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +256,184 @@ def list_content(
 # ---------------------------------------------------------------------------
 # 用户
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 提交审核
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/events/{event_id}/submissions",
+    response_model=SubmissionListResponse,
+    summary="活动的提交列表",
+)
+def list_submissions(
+    event_id: str,
+    session: DbSession,
+    settings: RuntimeSettings,
+    storage: FileStorageDep,
+    kind: str | None = None,
+    submission_status: str | None = Query(default=None, alias="status"),
+    submitter: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> SubmissionListResponse:
+    """按活动、分类标签、状态、提交者与时间范围筛选。"""
+    service = _submission_service(settings, storage)
+    statement = service.submissions.list_for_event(
+        session,
+        event_id=event_id,
+        kind=kind,
+        status=submission_status,
+        submitter=submitter,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    total = session.scalar(
+        select(func.count()).select_from(statement.subquery())
+    ) or 0
+    rows = session.scalars(
+        paginate(statement, offset=(page - 1) * page_size, limit=page_size)
+    ).all()
+
+    return SubmissionListResponse(
+        submissions=[_render_submission(session, row, service) for row in rows],
+        total=total,
+    )
+
+
+@router.patch(
+    "/submissions/{submission_id}",
+    response_model=SubmissionEnvelope,
+    summary="审核提交（变更状态）",
+)
+def review_submission(
+    submission_id: int,
+    payload: SubmissionReviewRequest,
+    session: DbSession,
+    admin: AdminUser,
+    settings: RuntimeSettings,
+    storage: FileStorageDep,
+) -> SubmissionEnvelope:
+    service = _submission_service(settings, storage)
+    submission = service.review(
+        session, submission_id=submission_id, status_value=payload.status, actor=admin
+    )
+    return SubmissionEnvelope(
+        submission=_render_submission(session, submission, service)
+    )
+
+
+@router.delete(
+    "/submissions/{submission_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删除提交（并释放名额）",
+)
+def delete_submission(
+    submission_id: int,
+    session: DbSession,
+    response: Response,
+    settings: RuntimeSettings,
+    storage: FileStorageDep,
+) -> Response:
+    _submission_service(settings, storage).delete_submission(
+        session, submission_id=submission_id
+    )
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.post(
+    "/submissions:delete",
+    status_code=status.HTTP_200_OK,
+    summary="批量删除提交",
+)
+def delete_submissions(
+    payload: BatchDeleteRequest,
+    session: DbSession,
+    settings: RuntimeSettings,
+    storage: FileStorageDep,
+) -> dict[str, int]:
+    """批量删除后按实际行数重算计数。
+
+    逐条递减在批量场景下容易漏，而重算顺便成为计数器唯一需要的自愈入口。
+    """
+    deleted = _submission_service(settings, storage).delete_many(
+        session, submission_ids=payload.ids
+    )
+    return {"deleted": deleted}
+
+
+# ---------------------------------------------------------------------------
+# 用户管理
+# ---------------------------------------------------------------------------
+
+
+@router.get("/users", response_model=UserListResponse, summary="用户列表")
+def list_users(
+    session: DbSession,
+    settings: RuntimeSettings,
+    role: str | None = None,
+    is_active: bool | None = None,
+    username: str | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> UserListResponse:
+    repo = UserRepository()
+    statement = repo.list_users(
+        session, role=role, is_active=is_active, username_like=username
+    )
+    total = session.scalar(select(func.count()).select_from(statement.subquery())) or 0
+    rows = session.scalars(
+        paginate(statement, offset=(page - 1) * page_size, limit=page_size)
+    ).all()
+    return UserListResponse(
+        users=[UserAdminPublic.from_model(row) for row in rows], total=total
+    )
+
+
+@router.patch(
+    "/users/{user_id}", response_model=UserAdminEnvelope, summary="修改用户角色或状态"
+)
+def update_user(
+    user_id: int,
+    payload: UserUpdateRequest,
+    session: DbSession,
+    admin: AdminUser,
+    settings: RuntimeSettings,
+) -> UserAdminEnvelope:
+    """提权、降权、停用与启用。
+
+    角色与状态变更都会吊销该用户的全部会话：不吊销的话，降级后的用户在旧会话里
+    仍然持有管理权限，而停用也只是"下次登录才生效"。
+    """
+    service = AuthService(settings)
+    changes = payload.model_dump(exclude_unset=True)
+
+    target = None
+    if "role" in changes and changes["role"] is not None:
+        target = service.set_role(
+            session, actor=admin, target_id=user_id, role=changes["role"]
+        )
+    if "is_active" in changes and changes["is_active"] is not None:
+        target = service.set_active(
+            session, actor=admin, target_id=user_id, is_active=changes["is_active"]
+        )
+    if "display_name" in changes and changes["display_name"] is not None:
+        target = service.users.get(session, user_id)
+        if target is None:
+            raise NotFound("用户不存在")
+        target.display_name = changes["display_name"]
+
+    if target is None:
+        target = service.users.get(session, user_id)
+        if target is None:
+            raise NotFound("用户不存在")
+
+    return UserAdminEnvelope(user=UserAdminPublic.from_model(target))
 
 
 @router.post(

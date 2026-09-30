@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import logging
+from collections.abc import Callable, Iterator
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -35,6 +36,28 @@ user_repo = UserRepository()
 session_repo = SessionRepository()
 event_repo = EventRepository()
 
+logger = logging.getLogger(__name__)
+
+_AFTER_COMMIT_KEY = "after_commit"
+
+
+def register_after_commit(session: Session, callback: Callable[[], None]) -> None:
+    """把副作用推迟到事务**提交成功之后**执行。
+
+    典型用途是删除附件字节：数据库行在事务里删掉，字节却在文件系统上。先删字节
+    再提交，一旦事务回滚就会留下指向不存在文件的记录；反过来则要么留孤儿字节
+    （可被 janitor 回收），要么一切正常。两种失败模式的代价不对称，所以选后者。
+    """
+    session.info.setdefault(_AFTER_COMMIT_KEY, []).append(callback)
+
+
+def run_after_commit(session: Session) -> None:
+    for callback in session.info.pop(_AFTER_COMMIT_KEY, []):
+        try:
+            callback()
+        except Exception:
+            logger.exception("提交后回调执行失败")
+
 
 def get_db(request: Request) -> Iterator[Session]:
     """请求级会话：**一次请求 = 一个事务**。
@@ -51,7 +74,11 @@ def get_db(request: Request) -> Iterator[Session]:
         session.commit()
     except Exception:
         session.rollback()
+        # 回滚时丢弃待执行的副作用：文件必须保留，否则记录会指向不存在的字节
+        session.info.pop(_AFTER_COMMIT_KEY, None)
         raise
+    else:
+        run_after_commit(session)
     finally:
         session.close()
 
@@ -266,6 +293,7 @@ __all__ = [
     "get_runtime_settings",
     "limit_by_client_ip",
     "limit_by_user",
+    "register_after_commit",
     "reject_oversized_request",
     "request_client_ip",
     "request_user_agent",
@@ -273,4 +301,5 @@ __all__ = [
     "require_json_content_type",
     "require_user",
     "resolve_user_by_token",
+    "run_after_commit",
 ]
