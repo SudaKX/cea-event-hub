@@ -2,10 +2,10 @@
 
 ## 1. 后端骨架与依赖
 
-- [ ] 1.1 建立 `backend/` 目录结构与 `pyproject.toml`，安装 `fastapi`、`uvicorn`、`sqlalchemy>=2`、`alembic`、`pydantic-settings`、`argon2-cffi`、`python-multipart`、`pytest`、`httpx`；以 `pip install` 成功且 `python -c "import fastapi, sqlalchemy, argon2"` 无错误为验证
-- [ ] 1.2 实现 `core/config.py`（`pydantic-settings`）：`API_PREFIX`、`DATABASE_URL`、`CONTENT_DIR`、`DATA_DIR`、各项体积与数量上限、`SESSION_TTL`、`IP_HASH_SALT`、`EMAIL_BACKEND`、以及 `REQUIRE_EMAIL_VERIFICATION` / `ALLOW_SELF_SERVICE_RESET` / `REGISTRATION_INVITE_CODE` 三个默认关闭的开关；以单测断言默认值与 `.env` 覆盖均生效为验证
-- [ ] 1.3 实现 `core/errors.py`：统一错误信封 `{error: {code, message, fields?}}` 与领域异常到 HTTP 的映射；以测试逐一断言 401 `login_required`、403 `event_closed`、404、409 `quota_exhausted`、415、422 `validation_failed` 的状态码与 `code` 为验证
-- [ ] 1.4 实现 `main.py` 的 `create_app()`，装配中间件、异常处理器、路由与静态挂载；以 `GET {API_PREFIX}/health` 返回 200 为验证
+- [x] 1.1 建立 `backend/` 目录结构与 `pyproject.toml`，安装 `fastapi`、`uvicorn`、`sqlalchemy>=2`、`alembic`、`pydantic-settings`、`argon2-cffi`、`python-multipart`、`pytest`、`httpx`；以 `pip install` 成功且 `python -c "import fastapi, sqlalchemy, argon2"` 无错误为验证
+- [x] 1.2 实现 `core/config.py`（`pydantic-settings`）：`API_PREFIX`、`DATABASE_URL`、`CONTENT_DIR`、`DATA_DIR`、各项体积与数量上限、`SESSION_TTL`、`IP_HASH_SALT`、`EMAIL_BACKEND`、以及 `REQUIRE_EMAIL_VERIFICATION` / `ALLOW_SELF_SERVICE_RESET` / `REGISTRATION_INVITE_CODE` 三个默认关闭的开关；以单测断言默认值与 `.env` 覆盖均生效为验证
+- [x] 1.3 实现 `core/errors.py`：统一错误信封 `{error: {code, message, fields?}}` 与领域异常到 HTTP 的映射；以测试逐一断言 401 `login_required`、403 `event_closed`、404、409 `quota_exhausted`、415、422 `validation_failed` 的状态码与 `code` 为验证
+- [x] 1.4 实现 `main.py` 的 `create_app()`，装配中间件、异常处理器、路由与静态挂载；以 `GET {API_PREFIX}/health` 返回 200 为验证
 
 ## 2. 数据层与迁移
 
