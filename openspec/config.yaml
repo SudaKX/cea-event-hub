@@ -1,0 +1,54 @@
+schema: spec-driven
+
+# Project context (shown to AI when creating artifacts)
+context: |
+  CEA 社团活动网站（cea-event-hub）：前后端分离的社团活动托管与信息收集平台。
+
+  技术栈
+    - 后端：Python 3.13 + FastAPI + SQLAlchemy 2.x（同步）+ Alembic；当前 SQLite，预留迁移 MySQL
+    - 前端：Vue 3 + TypeScript + Vite + Pinia + vue-router + axios，单页应用
+    - 部署：nginx 单机反向代理 + systemd；后端以单进程（--workers 1）运行
+
+  领域
+    - 社团活动网页内容由各活动自行编写（手写单文件 HTML），平台负责托管、身份、信息收集与审核
+    - 活动页承载于沙箱 iframe，与宿主单页应用通过 postMessage 桥接，活动页零凭证
+    - 提交内容不做字段级契约，后端接受任意结构的 JSON 与文件，只约束体积与数量
+
+  不可违背的约定（改动它们等于改动架构）
+    - 活动页 iframe 不含 allow-same-origin；活动页不持有任何可复用凭据
+    - /content/** 返回 Access-Control-Allow-Origin: *，/api/** 不返回任何 CORS 头（该不对称是隔离机制的一部分，两侧必须同时正确）
+    - /data/** 绝不可静态访问，附件只能经由鉴权端点读取
+    - 桥接只接受固定的操作名白名单，活动标识一律由宿主自身路由决定，绝不采信活动页传值
+    - 活动内提交条数上限以单语句 CAS 维护，删除提交必须在同一事务内递减该计数
+
+  工程纪律
+    - 分层：api -> services -> repositories -> models；service 不 import fastapi，repo 不含业务判断
+    - 跨库可移植：方言 SQL 只出现在 repositories；索引列显式长度；写入前归一化；时间统一 UTC；连接级启用外键约束
+    - 三个可替换端口：RateLimiter、FileStorage、EmailSender
+
+  语言
+    - 工件与文档用中文；代码标识符与提交信息用英文
+
+# Per-artifact rules
+rules:
+  proposal:
+    - 必须显式列出本期不做项，避免范围在实现阶段膨胀
+  design:
+    - 每项决策必须写明所考虑的备选方案与否决理由，而不是只给结论
+    - 涉及安全边界的决策必须指明缺少哪一步会导致该边界失效
+  tasks:
+    - 每条任务必须自带可执行的验证方式（测试、命令或可观察行为）
+    - 测试与文档随所属任务组落地，不得集中到末尾的测试组或文档组
+  specs:
+    - 只写可观察的行为契约；实现机制（表结构、SQL 写法、库选型）一律写入 design
+    - 规范性要求使用 SHALL/MUST，避免 should/may
+
+# Per-operation guidance
+operations:
+  apply:
+    guidance:
+      - 按 tasks 组内顺序推进；每完成一条即勾选，不要批量事后勾选
+      - 若实现中发现某条任务与 design 冲突，先修订 design 再改实现，不要在代码里绕过
+  archive:
+    guidance:
+      - 归档前确认 tasks 全部完成，并汇总本期明确未做的部分
