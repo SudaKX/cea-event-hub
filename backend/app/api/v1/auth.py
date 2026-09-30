@@ -1,0 +1,170 @@
+"""认证接口：注册、登录、登出、当前身份、修改口令。
+
+会话凭据只经 HttpOnly Cookie 下发（`Authorization: Bearer` 为等价路径），
+**绝不出现在响应体里**——桥接层的活动页也因此拿不到任何可复用凭据。
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Request, Response, status
+
+from app.core.config import Settings
+from app.core.deps import (
+    CurrentUser,
+    DbSession,
+    RateLimiterDep,
+    RequiredUser,
+    RuntimeSettings,
+    extract_session_token,
+    limit_by_client_ip,
+    request_client_ip,
+    request_user_agent,
+)
+from app.schemas import UserPublic
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    LoginRequest,
+    RegisterRequest,
+    UserEnvelope,
+)
+from app.services.auth import AuthService
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _service(settings: Settings) -> AuthService:
+    return AuthService(settings)
+
+
+def _guard_auth_rate(request: Request, limiter, scope: str) -> None:
+    """登录/注册/改密共用的来源维度限流。
+
+    没有这层，开放注册 + 无登录限流就等于允许在线口令爆破。
+    """
+    runtime: Settings = request.app.state.settings
+    limit_by_client_ip(
+        request,
+        limiter,
+        scope=f"auth:{scope}",
+        limit=runtime.RATE_LIMIT_AUTH_IP_MAX,
+        window_seconds=runtime.RATE_LIMIT_AUTH_IP_WINDOW,
+    )
+
+
+def _set_session_cookie(response: Response, settings: Settings, token: str) -> None:
+    response.set_cookie(
+        key=settings.SESSION_COOKIE_NAME,
+        value=token,
+        max_age=settings.SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=settings.SESSION_COOKIE_SECURE,
+        samesite=settings.SESSION_COOKIE_SAMESITE,
+        path=settings.SESSION_COOKIE_PATH,
+    )
+
+
+def _clear_session_cookie(response: Response, settings: Settings) -> None:
+    response.delete_cookie(
+        key=settings.SESSION_COOKIE_NAME,
+        path=settings.SESSION_COOKIE_PATH,
+    )
+
+
+@router.post(
+    "/register",
+    status_code=status.HTTP_201_CREATED,
+    response_model=UserEnvelope,
+    summary="开放注册",
+)
+def register(
+    payload: RegisterRequest,
+    request: Request,
+    session: DbSession,
+    limiter: RateLimiterDep,
+    settings: RuntimeSettings,
+) -> UserEnvelope:
+    _guard_auth_rate(request, limiter, "register")
+
+    user = _service(settings).register(
+        session,
+        username=payload.username,
+        password=payload.password,
+        display_name=payload.display_name,
+        email=payload.email,
+        invite_code=payload.invite_code,
+    )
+    # 刻意不自动登录：让"注册"与"获得会话"是两件明确的事
+    return UserEnvelope(user=UserPublic.from_model(user))
+
+
+@router.post("/login", response_model=UserEnvelope, summary="登录")
+def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    session: DbSession,
+    limiter: RateLimiterDep,
+    settings: RuntimeSettings,
+) -> UserEnvelope:
+    _guard_auth_rate(request, limiter, "login")
+
+    user, token = _service(settings).login(
+        session,
+        username=payload.username,
+        password=payload.password,
+        ip=request_client_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    _set_session_cookie(response, settings, token)
+    # 响应体里没有令牌，只有用户信息
+    return UserEnvelope(user=UserPublic.from_model(user))
+
+
+@router.post(
+    "/logout", status_code=status.HTTP_204_NO_CONTENT, summary="登出"
+)
+def logout(
+    request: Request,
+    response: Response,
+    session: DbSession,
+    settings: RuntimeSettings,
+) -> Response:
+    token = extract_session_token(request)
+    if token:
+        _service(settings).logout(session, token)
+    _clear_session_cookie(response, settings)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.get("/me", response_model=UserEnvelope, summary="当前登录用户")
+def me(user: RequiredUser) -> UserEnvelope:
+    return UserEnvelope(user=UserPublic.from_model(user))
+
+
+@router.post(
+    "/password", status_code=status.HTTP_204_NO_CONTENT, summary="修改口令"
+)
+def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    response: Response,
+    session: DbSession,
+    user: RequiredUser,
+    limiter: RateLimiterDep,
+    settings: RuntimeSettings,
+) -> Response:
+    _guard_auth_rate(request, limiter, "password")
+
+    _service(settings).change_password(
+        session,
+        user=user,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+        current_token=extract_session_token(request),
+    )
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+__all__ = ["router"]

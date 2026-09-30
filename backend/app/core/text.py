@@ -17,6 +17,11 @@ _USERNAME_MAX = 32
 
 _EMAIL_MAX = 255
 
+# 口令长度上下限。上限存在的理由不是安全而是资源：Argon2 的代价随输入增长，
+# 不封顶就等于给了一条廉价的 CPU 消耗路径。
+PASSWORD_MIN = 8
+PASSWORD_MAX = 128
+
 
 def normalize_username(value: str) -> str:
     """NFC + 去首尾空白 + casefold。
@@ -58,6 +63,21 @@ def email_shape_error(value: str) -> str | None:
         return "邮箱格式不正确"
     if any(ch.isspace() for ch in value):
         return "邮箱不能包含空白字符"
+    return None
+
+
+def password_shape_error(value: str) -> str | None:
+    """只检查长度。
+
+    不强制"必须含大写/数字/符号"：那类规则会把人推向 Passw0rd! 这种可预测的
+    形态，而长度才是真正有效的强度杠杆。
+    """
+    if not value:
+        return "口令不能为空"
+    if len(value) < PASSWORD_MIN:
+        return f"口令至少 {PASSWORD_MIN} 个字符"
+    if len(value) > PASSWORD_MAX:
+        return f"口令最多 {PASSWORD_MAX} 个字符"
     return None
 
 

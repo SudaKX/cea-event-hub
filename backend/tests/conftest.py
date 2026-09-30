@@ -54,12 +54,21 @@ def db_session(test_db: Database) -> Iterator:
 
 
 @pytest.fixture
-def app(test_db: Database):
+def app(test_db: Database, monkeypatch: pytest.MonkeyPatch):
     """应用实例指向临时库。
 
     启动任务（首次引导、后续的 janitor）读的是 `app.state.database`，
     因此注入后不会碰开发库 `var/app.db`。
+
+    这里同时关掉首次引导，否则每个用到客户端的测试都会生成一个随机管理员
+    口令并以告警级别打出来，把测试输出淹掉。需要引导的测试自行打开开关。
     """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ADMIN_BOOTSTRAP_ENABLED", False)
+    # 测试走 http，Secure Cookie 不会被回传，因此按开发环境的配置来
+    monkeypatch.setattr(settings, "SESSION_COOKIE_SECURE", False)
+
     application = create_app()
     application.state.database = test_db
     return application

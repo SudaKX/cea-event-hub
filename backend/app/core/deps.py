@@ -12,10 +12,12 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
+from app.core.clientip import FORWARDED_HEADER, resolve_client_ip
 from app.core.clock import utcnow
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.core.enums import UserRole
-from app.core.exceptions import Forbidden, LoginRequired, NotFound
+from app.core.exceptions import Forbidden, LoginRequired, NotFound, RateLimited
+from app.core.ports import RateLimiter
 from app.core.security import hash_token
 from app.db.models import Event, User
 from app.db.session import Database
@@ -48,6 +50,78 @@ def get_db(request: Request) -> Iterator[Session]:
 
 
 DbSession = Annotated[Session, Depends(get_db)]
+
+
+def get_runtime_settings(request: Request) -> Settings:
+    """配置从 app.state 取，测试可以整体替换。"""
+    return request.app.state.settings
+
+
+RuntimeSettings = Annotated[Settings, Depends(get_runtime_settings)]
+
+
+def get_rate_limiter(request: Request) -> RateLimiter:
+    return request.app.state.rate_limiter
+
+
+RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+
+
+def enforce_rate_limit(
+    limiter: RateLimiter, key: str, *, limit: int, window_seconds: int
+) -> None:
+    """超过阈值就抛 429。
+
+    429 与 409（名额已满）、403（活动已关闭）、401（需要登录）在状态码上刻意
+    分开，客户端才能判断"值得重试"还是"到此为止"（task 11.4）。
+    """
+    settings_rate_limit_disabled = not settings.RATE_LIMIT_ENABLED
+    if settings_rate_limit_disabled:
+        return
+    decision = limiter.hit(key, limit=limit, window_seconds=window_seconds)
+    if not decision.allowed:
+        raise RateLimited(retry_after=decision.retry_after)
+
+
+def request_client_ip(request: Request) -> str:
+    """把 Request 拆成框架无关的输入，交给 core.clientip 判定。"""
+    runtime: Settings = request.app.state.settings
+    return resolve_client_ip(
+        peer=request.client.host if request.client else "",
+        forwarded_for=request.headers.get(FORWARDED_HEADER),
+        trusted_proxies=runtime.TRUSTED_PROXY_IPS,
+    )
+
+
+def request_user_agent(request: Request) -> str:
+    return request.headers.get("User-Agent", "")
+
+
+def limit_by_client_ip(
+    request: Request,
+    limiter: RateLimiter,
+    *,
+    scope: str,
+    limit: int,
+    window_seconds: int,
+) -> None:
+    enforce_rate_limit(
+        limiter,
+        f"{scope}:ip:{request_client_ip(request)}",
+        limit=limit,
+        window_seconds=window_seconds,
+    )
+
+
+def limit_by_user(
+    limiter: RateLimiter, *, scope: str, user_id: int, limit: int, window_seconds: int
+) -> None:
+    enforce_rate_limit(
+        limiter,
+        f"{scope}:u:{user_id}",
+        limit=limit,
+        window_seconds=window_seconds,
+    )
 
 
 def extract_session_token(request: Request) -> str | None:
@@ -130,11 +204,20 @@ __all__ = [
     "CurrentEvent",
     "CurrentUser",
     "DbSession",
+    "RateLimiterDep",
     "RequiredUser",
+    "RuntimeSettings",
+    "enforce_rate_limit",
     "extract_session_token",
     "get_current_user",
     "get_db",
     "get_event",
+    "get_rate_limiter",
+    "get_runtime_settings",
+    "limit_by_client_ip",
+    "limit_by_user",
+    "request_client_ip",
+    "request_user_agent",
     "require_admin",
     "require_user",
     "resolve_user_by_token",
