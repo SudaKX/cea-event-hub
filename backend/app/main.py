@@ -12,12 +12,17 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from sqlalchemy.exc import OperationalError
 
 from app.api.v1 import api_router
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
+from app.db.session import db
+from app.services.bootstrap import ensure_bootstrap_admin
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,28 @@ def configure_logging() -> None:
     )
 
 
+def run_startup_tasks(app: FastAPI) -> None:
+    """启动时的一次性任务。
+
+    用 `app.state.database` 而不是模块级 `db`，这样测试可以注入临时库，
+    不会在开发库里留下痕迹。
+    """
+    try:
+        ensure_bootstrap_admin(app.state.database, app.state.settings)
+    except OperationalError as exc:
+        # 表不存在时的报错很晦涩（"no such table: users"），这里补一句该怎么做
+        logger.error(
+            "数据库不可用或尚未建表：%s\n请先执行：alembic upgrade head", exc
+        )
+        raise
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    run_startup_tasks(app)
+    yield
+
+
 def create_app() -> FastAPI:
     configure_logging()
     settings.ensure_directories()
@@ -38,10 +65,14 @@ def create_app() -> FastAPI:
     api_prefix = settings.API_PREFIX
     app = FastAPI(
         title=settings.APP_NAME,
+        lifespan=lifespan,
         docs_url=None if settings.is_production else f"{api_prefix}/docs",
         redoc_url=None,
         openapi_url=None if settings.is_production else f"{api_prefix}/openapi.json",
     )
+
+    app.state.settings = settings
+    app.state.database = db
 
     # 刻意不注册 CORSMiddleware。
     # /api/** 必须不返回任何 CORS 响应头——这是沙箱隔离机制的一部分

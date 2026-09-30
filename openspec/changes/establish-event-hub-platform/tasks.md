@@ -9,13 +9,13 @@
 
 ## 2. 数据层与迁移
 
-- [ ] 2.1 实现 `db/base.py`：`DeclarativeBase` 并设置 `MetaData(naming_convention=...)` 统一约束命名；以单测断言生成的主键、外键、唯一与索引约束名符合约定（这是 MySQL 迁移时能 drop 约束的前提）为验证
-- [ ] 2.2 实现 `db/session.py`：engine、`SessionLocal` 与连接级 `PRAGMA foreign_keys=ON` 钩子；以单测断言 `PRAGMA foreign_keys` 返回 1 且 `ON DELETE CASCADE` 真实生效（删父行后子行消失）为验证
-- [ ] 2.3 定义六张表的 ORM 模型（`users`、`sessions`、`user_tokens`、`events`、`submissions`、`submission_files`），所有索引列显式 `String(n)` 并统一 UTC 时间；以单测建表并断言列类型、可空性、唯一约束与索引为验证
-- [ ] 2.4 初始化 Alembic 并生成首个迁移；以 `alembic upgrade head` 建出全部表、`alembic downgrade base` 干净回退为验证
-- [ ] 2.5 实现首次启动引导：用户表为空时在启动过程中自动创建管理员，账号名与初始口令可由环境变量覆盖，未提供口令时生成高强度随机值并**只在创建那一次**以告警级别输出（附首次登录后立即改密的提示），提供口令时启动输出中不出现口令，可由配置整体关闭，且在重复与并发启动下幂等；以测试覆盖空库创建、已有任意用户时不触发（即使不存在名为 admin 的账号）、环境变量覆盖账号名与口令、随机口令重启后不再输出、环境变量提供口令时输出中不含口令、重复启动不重复创建、关闭开关后不创建为验证
-- [ ] 2.6 在 `docs/` 记录首次启动引导的配置项（`ADMIN_BOOTSTRAP_ENABLED`、`ADMIN_USERNAME`、`ADMIN_INITIAL_PASSWORD`）、口令输出的两种情形差异，以及引导账号名可预测因而不可移除注册保留名的原因；以文档中每个配置项都能在 `core/config.py` 中找到对应项、且保留名约束在 4.2 的测试中确有覆盖为验证
-- [ ] 2.7 在 `backend/README.md` 记录本地建库与迁移命令；以照文档从空目录执行可成功建库为验证
+- [x] 2.1 实现 `db/base.py`：`DeclarativeBase` 并设置 `MetaData(naming_convention=...)` 统一约束命名；以单测断言生成的主键、外键、唯一与索引约束名符合约定（这是 MySQL 迁移时能 drop 约束的前提）为验证
+- [x] 2.2 实现 `db/session.py`：engine、`SessionLocal` 与连接级 `PRAGMA foreign_keys=ON` 钩子；以单测断言 `PRAGMA foreign_keys` 返回 1 且 `ON DELETE CASCADE` 真实生效（删父行后子行消失）为验证
+- [x] 2.3 定义六张表的 ORM 模型（`users`、`sessions`、`user_tokens`、`events`、`submissions`、`submission_files`），所有索引列显式 `String(n)` 并统一 UTC 时间；以单测建表并断言列类型、可空性、唯一约束与索引为验证
+- [x] 2.4 初始化 Alembic 并生成首个迁移；以 `alembic upgrade head` 建出全部表、`alembic downgrade base` 干净回退为验证
+- [x] 2.5 实现首次启动引导：用户表为空时在启动过程中自动创建管理员，账号名与初始口令可由环境变量覆盖，未提供口令时生成高强度随机值并**只在创建那一次**以告警级别输出（附首次登录后立即改密的提示），提供口令时启动输出中不出现口令，可由配置整体关闭，且在重复与并发启动下幂等；以测试覆盖空库创建、已有任意用户时不触发（即使不存在名为 admin 的账号）、环境变量覆盖账号名与口令、随机口令重启后不再输出、环境变量提供口令时输出中不含口令、重复启动不重复创建、关闭开关后不创建为验证
+- [x] 2.6 在 `docs/` 记录首次启动引导的配置项（`ADMIN_BOOTSTRAP_ENABLED`、`ADMIN_USERNAME`、`ADMIN_INITIAL_PASSWORD`）、口令输出的两种情形差异，以及引导账号名可预测因而不可移除注册保留名的原因；以文档中每个配置项都能在 `core/config.py` 中找到对应项、且保留名约束在 4.2 的测试中确有覆盖为验证
+- [x] 2.7 在 `backend/README.md` 记录本地建库与迁移命令；以照文档从空目录执行可成功建库为验证
 
 ## 3. 分层骨架与端口
 
