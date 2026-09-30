@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     # 未加盐的 IP 哈希可在数秒内暴力反查，因此生产必须提供盐
     IP_HASH_SALT: str = _DEV_IP_HASH_SALT
 
+    # ---------- 提交策略 ----------
+    # 新建活动时 submission_requires_login 的**种子值**。它只在创建那一刻参与，
+    # 之后运行时唯一真源是活动自己的字段——单层来源，避免两处配置打架
+    SUBMISSION_REQUIRES_LOGIN_SEED: bool = False
+
     # ---------- 提交体积与数量约束 ----------
     MAX_PAYLOAD_BYTES: int = 64 * 1024
     MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024

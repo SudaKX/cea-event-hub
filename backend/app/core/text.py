@@ -66,6 +66,48 @@ def email_shape_error(value: str) -> str | None:
     return None
 
 
+#: 活动标识的允许形态。它同时是 SPA 路径、内容目录名与数据目录名，
+#: 因此必须同时是 URL 安全与文件系统安全的。
+_EVENT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,62}[a-z0-9]$")
+_EVENT_ID_MIN = 3
+_EVENT_ID_MAX = 64
+
+
+def event_id_shape_error(value: str) -> str | None:
+    """校验活动标识。
+
+    不允许大写与点号：标识会直接成为目录名，放宽字符集等于给路径处理留下
+    需要反复论证的边界情况（大小写不敏感文件系统、`.`/`..`、尾随点等）。
+    """
+    if not value:
+        return "活动标识不能为空"
+    if len(value) < _EVENT_ID_MIN:
+        return f"活动标识至少 {_EVENT_ID_MIN} 个字符"
+    if len(value) > _EVENT_ID_MAX:
+        return f"活动标识最多 {_EVENT_ID_MAX} 个字符"
+    if not _EVENT_ID.match(value):
+        return "活动标识只能包含小写字母、数字、- 与 _，且必须以字母或数字开头结尾"
+    return None
+
+
+def entry_path_shape_error(value: str) -> str | None:
+    """校验内容入口页的相对路径。
+
+    只允许活动内容目录内的相对路径：绝对路径与任何形式的向上跳转都会被拒，
+    否则一个活动就能把 iframe 指向别处。
+    """
+    if not value:
+        return "入口页不能为空"
+    if len(value) > 255:
+        return "入口页路径过长"
+    if value.startswith(("/", "\\")) or ":" in value:
+        return "入口页必须是相对路径"
+    parts = re.split(r"[\\/]+", value)
+    if any(part in ("", ".", "..") for part in parts):
+        return "入口页路径不能包含空段、. 或 .."
+    return None
+
+
 def password_shape_error(value: str) -> str | None:
     """只检查长度。
 

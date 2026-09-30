@@ -45,10 +45,10 @@
 
 ## 6. 活动目录
 
-- [ ] 6.1 实现活动服务：`event_id` 不可变、`draft`/`live`/`archived` 三态、提交策略字段（`submission_requires_login`、开放与截止时间、`max_submissions`）；以单测覆盖状态流转与标识不可改为验证
-- [ ] 6.2 实现公开列表与详情：仅返回 `live`，详情含 `content_version`、提交策略字段与 `quota{limit, used, remaining}`；以测试覆盖 draft 不出现、不限额活动 `limit` 为 null、满额时 `remaining` 为 0 为验证
-- [ ] 6.3 实现管理端活动 CRUD 与状态变更，仅 `admin` 可访问；以测试覆盖普通用户 403、匿名 401、创建后初始为 draft、改标识被拒为验证
-- [ ] 6.4 实现配额上限求值：`max_submissions` 非空时优先，否则按 `submission_requires_login` 取默认（可匿名默认 4096，需登录默认不限额）；以单测覆盖四种组合为验证
+- [x] 6.1 实现活动服务：`event_id` 不可变、`draft`/`live`/`archived` 三态、提交策略字段（`submission_requires_login`、开放与截止时间、`max_submissions`）；以单测覆盖状态流转与标识不可改为验证
+- [x] 6.2 实现公开列表与详情：仅返回 `live`，详情含 `content_version`、提交策略字段与 `quota{limit, used, remaining}`；以测试覆盖 draft 不出现、不限额活动 `limit` 为 null、满额时 `remaining` 为 0 为验证
+- [x] 6.3 实现管理端活动 CRUD 与状态变更，仅 `admin` 可访问；以测试覆盖普通用户 403、匿名 401、创建后初始为 draft、改标识被拒为验证
+- [x] 6.4 实现配额上限求值：`max_submissions` 非空时优先，否则按 `submission_requires_login` 取默认（可匿名默认 4096，需登录默认不限额）；以单测覆盖四种组合为验证
 
 ## 7. 内容托管与投放
 

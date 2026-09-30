@@ -79,3 +79,55 @@ def client(app):
     with TestClient(app) as test_client:
         yield test_client
 
+
+ADMIN_USERNAME = "root"
+ADMIN_PASSWORD = "admin-pass-123"
+
+
+@pytest.fixture
+def admin_id(test_db: Database) -> int:
+    """直接在库里造一个管理员，绕过注册（注册只能产生普通用户）。"""
+    from app.core.enums import UserRole
+    from app.core.security import hash_password
+    from app.db.models import User
+
+    with test_db.session() as session:
+        user = User(
+            username=ADMIN_USERNAME,
+            display_name=ADMIN_USERNAME,
+            password_hash=hash_password(ADMIN_PASSWORD),
+            role=UserRole.ADMIN.value,
+        )
+        session.add(user)
+        session.flush()
+        return user.id
+
+
+@pytest.fixture
+def admin_client(client, admin_id: int):
+    """已登录管理员的客户端。"""
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+    )
+    assert response.status_code == 200, response.text
+    return client
+
+
+@pytest.fixture
+def user_client(client, test_db: Database):
+    """已登录普通用户的客户端。"""
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"username": "alice", "password": "correct-horse"},
+    )
+    assert response.status_code == 201, response.text
+    assert (
+        client.post(
+            "/api/v1/auth/login",
+            json={"username": "alice", "password": "correct-horse"},
+        ).status_code
+        == 200
+    )
+    return client
+
