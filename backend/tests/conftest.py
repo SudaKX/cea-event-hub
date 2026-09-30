@@ -148,3 +148,25 @@ def user_client(client, test_db: Database):
     )
     return client
 
+
+@pytest.fixture
+def anon_client(app):
+    """**另一个**浏览器：与已登录客户端共享 app，但不共享 Cookie。
+
+    需要同时观察"匿名"与"已登录"两种身份时必须用它——`client` 与
+    `user_client` 是同一个 TestClient 实例，Cookie 是共享的。
+    """
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def fault_client(app):
+    """不把未捕获异常抛回测试的客户端。
+
+    用来验证"服务端炸了"这条路径本身（例如落库失败后必须清理已写文件）。
+    默认的 TestClient 会把异常直接抛进测试，那样就观察不到 500 响应。
+    """
+    with TestClient(app, raise_server_exceptions=False) as test_client:
+        yield test_client
+

@@ -16,8 +16,15 @@ from app.core.clientip import FORWARDED_HEADER, resolve_client_ip
 from app.core.clock import utcnow
 from app.core.config import Settings, settings
 from app.core.enums import UserRole
-from app.core.exceptions import Forbidden, LoginRequired, NotFound, RateLimited
-from app.core.ports import EmailSender, RateLimiter
+from app.core.exceptions import (
+    Forbidden,
+    LoginRequired,
+    NotFound,
+    PayloadTooLarge,
+    RateLimited,
+    UnsupportedMediaType,
+)
+from app.core.ports import EmailSender, FileStorage, RateLimiter
 from app.core.security import hash_token
 from app.db.models import Event, User
 from app.db.session import Database
@@ -72,6 +79,38 @@ def get_email_sender(request: Request) -> EmailSender:
 
 
 EmailSenderDep = Annotated[EmailSender, Depends(get_email_sender)]
+
+
+def get_file_storage(request: Request) -> FileStorage:
+    return request.app.state.storage
+
+
+FileStorageDep = Annotated[FileStorage, Depends(get_file_storage)]
+
+
+def require_json_content_type(request: Request) -> None:
+    """JSON 端点强制 `application/json`。
+
+    这同时是一条免费的 CSRF 防线：跨站表单只能发 form-urlencoded /
+    multipart / text-plain，**发不出 application/json**，因此配合 SameSite
+    与"/api 无 CORS 头"就把表单类 CSRF 封死了。
+    """
+    content_type = request.headers.get("content-type", "")
+    if not content_type.lower().startswith("application/json"):
+        raise UnsupportedMediaType()
+
+
+def reject_oversized_request(request: Request) -> None:
+    """按 Content-Length 做一次便宜的预筛。
+
+    权威判定在 service 层（按规范化序列化后的长度）；这里只是让超大请求尽早
+    失败，不必先读进内存。
+    """
+    runtime: Settings = request.app.state.settings
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit():
+        if int(declared) > runtime.MAX_REQUEST_BYTES:
+            raise PayloadTooLarge()
 
 
 def enforce_rate_limit(
@@ -212,6 +251,7 @@ __all__ = [
     "CurrentUser",
     "DbSession",
     "EmailSenderDep",
+    "FileStorageDep",
     "RateLimiterDep",
     "RequiredUser",
     "RuntimeSettings",
@@ -221,13 +261,16 @@ __all__ = [
     "get_db",
     "get_email_sender",
     "get_event",
+    "get_file_storage",
     "get_rate_limiter",
     "get_runtime_settings",
     "limit_by_client_ip",
     "limit_by_user",
+    "reject_oversized_request",
     "request_client_ip",
     "request_user_agent",
     "require_admin",
+    "require_json_content_type",
     "require_user",
     "resolve_user_by_token",
 ]

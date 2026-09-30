@@ -11,9 +11,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from sqlalchemy.exc import OperationalError
@@ -23,8 +24,13 @@ from app.api.v1 import api_router
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.db.session import db
-from app.infra import build_email_sender, build_rate_limiter
+from app.infra import (
+    build_email_sender,
+    build_file_storage,
+    build_rate_limiter,
+)
 from app.services.bootstrap import ensure_bootstrap_admin
+from app.services.janitor import Janitor
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +58,50 @@ def run_startup_tasks(app: FastAPI) -> None:
         raise
 
 
+def build_janitor(app: FastAPI) -> Janitor:
+    return Janitor(
+        database=app.state.database,
+        settings=app.state.settings,
+        storage=app.state.storage,
+        limiter=app.state.rate_limiter,
+    )
+
+
+def start_janitor_task(app: FastAPI) -> asyncio.Task | None:
+    """周期性清理。
+
+    跑在 `asyncio.to_thread` 里：janitor 是同步实现（同步数据库会话 + 文件系统
+    遍历），直接放在事件循环上会把整个进程卡住。
+    """
+    settings = app.state.settings
+    if not settings.JANITOR_ENABLED:
+        return None
+
+    async def _loop() -> None:
+        while True:
+            await asyncio.sleep(settings.JANITOR_INTERVAL_SECONDS)
+            try:
+                await asyncio.to_thread(build_janitor(app).run_once)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # 清理失败不该让服务退出
+                logger.exception("后台清理任务执行失败")
+
+    return asyncio.create_task(_loop())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     run_startup_tasks(app)
-    yield
+    janitor_task = start_janitor_task(app)
+    try:
+        yield
+    finally:
+        if janitor_task is not None:
+            janitor_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await janitor_task
 
 
 def create_app() -> FastAPI:
@@ -77,6 +123,7 @@ def create_app() -> FastAPI:
     app.state.database = db
     app.state.rate_limiter = build_rate_limiter(settings)
     app.state.email_sender = build_email_sender(settings)
+    app.state.storage = build_file_storage(settings)
 
     # 刻意不注册 CORSMiddleware。
     # /api/** 必须不返回任何 CORS 响应头——这是沙箱隔离机制的一部分

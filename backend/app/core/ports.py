@@ -61,6 +61,7 @@ class FileStorage(Protocol):
         kind: str,
         original_name: str,
         stream: BinaryIO,
+        max_bytes: int | None = None,
     ) -> StoredFile: ...
 
     def open(self, event_id: str, stored_rel: str) -> BinaryIO: ...

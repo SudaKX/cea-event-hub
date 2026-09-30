@@ -9,10 +9,11 @@ from __future__ import annotations
 import logging
 
 from app.core.config import Settings
-from app.core.ports import EmailSender, RateLimiter
+from app.core.ports import EmailSender, FileStorage, RateLimiter
 from app.infra.email_console import ConsoleEmailSender
 from app.infra.email_smtp import SmtpEmailSender
 from app.infra.ratelimit_memory import InMemoryRateLimiter
+from app.infra.storage_local import LocalDiskStorage
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,20 @@ def build_email_sender(settings: Settings) -> EmailSender:
     return ConsoleEmailSender()
 
 
+def build_file_storage(settings: Settings) -> FileStorage:
+    """构造文件存储。
+
+    当前是本地磁盘。要换成对象存储时改这里即可，service 只依赖 FileStorage 端口。
+    """
+    return LocalDiskStorage(settings.DATA_DIR)
+
+
 __all__ = [
     "ConsoleEmailSender",
     "InMemoryRateLimiter",
+    "LocalDiskStorage",
     "SmtpEmailSender",
     "build_email_sender",
+    "build_file_storage",
     "build_rate_limiter",
 ]

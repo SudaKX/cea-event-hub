@@ -13,6 +13,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 
 from app.core.ports import RateLimitDecision
 
@@ -24,18 +25,25 @@ class InMemoryRateLimiter:
     时间间隔，不关心绝对时刻。
     """
 
-    def __init__(self, *, max_keys: int = 20_000) -> None:
+    def __init__(
+        self,
+        *,
+        max_keys: int = 20_000,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
         self._buckets: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
         #: 键数量上限。超出后清理空桶，避免被大量一次性键撑爆内存。
         self._max_keys = max_keys
+        #: 时间源可注入，使窗口滑动的测试不必真的等待
+        self._clock: Callable[[], float] = clock or time.monotonic
 
     def hit(self, key: str, *, limit: int, window_seconds: int) -> RateLimitDecision:
         if limit <= 0:
             # limit<=0 视为"不限制"，便于用配置整体关掉某条限流
             return RateLimitDecision(allowed=True, remaining=0)
 
-        now = time.monotonic()
+        now = self._clock()
         cutoff = now - window_seconds
 
         with self._lock:
@@ -70,7 +78,7 @@ class InMemoryRateLimiter:
 
         没有这个清理，长期运行会为每个曾经出现过的键永久保留一个空 deque。
         """
-        cutoff = time.monotonic() - window_seconds
+        cutoff = self._clock() - window_seconds
         with self._lock:
             stale = [
                 key

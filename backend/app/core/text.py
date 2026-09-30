@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from app.core.enums import DEFAULT_SUBMISSION_KIND
+
 # 分类标签与用户名允许的字符。用于唯一性与路径安全，不是语义校验。
 _USERNAME_ALLOWED = re.compile(r"^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$")
 _USERNAME_MIN = 3
@@ -106,6 +108,24 @@ def entry_path_shape_error(value: str) -> str | None:
     if any(part in ("", ".", "..") for part in parts):
         return "入口页路径不能包含空段、. 或 .."
     return None
+
+
+#: 分类标签的允许形态。它不是语义校验，而是**路径穿越防护**：
+#: 该值会进入 data/{event_id}/{kind}/ 的路径，因此必须严格受限。
+_KIND_ALLOWED = re.compile(r"^[a-z0-9_-]{1,64}$")
+
+
+def sanitize_kind(value: str | None) -> str:
+    """把客户端给的分类标签收敛成安全的路径片段。
+
+    不合规就回落到固定默认值，而不是报错：标签只是分组用的便利字段，
+    为它拒绝整次提交没有道理。注意这里**不做小写化**——大写属于"不合规"，
+    回落到默认值，这样"合法值集合"与正则完全一致，不会出现两种理解。
+    """
+    if not value:
+        return DEFAULT_SUBMISSION_KIND
+    candidate = value.strip()
+    return candidate if _KIND_ALLOWED.match(candidate) else DEFAULT_SUBMISSION_KIND
 
 
 def password_shape_error(value: str) -> str | None:
