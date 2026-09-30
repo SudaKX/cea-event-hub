@@ -1,0 +1,286 @@
+/**
+ * 共享组件样式。
+ *
+ * 表单、按钮、提示这些模式在八个视图里重复出现，集中在这里而不是每个视图各写
+ * 一份 scoped 样式 —— 否则改一次圆角要改八处，而且很快会漂移出不一致的取值。
+ */
+
+/* ------------------------------------------------------------------ */
+/* 认证类页面（登录 / 注册 / 重置 / 验证）                              */
+/* ------------------------------------------------------------------ */
+
+.auth {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 40px 24px;
+}
+
+.auth__card {
+  width: min(400px, 100%);
+  padding: 28px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth__title {
+  font-size: 22px;
+}
+
+.auth__title em {
+  font-style: normal;
+  color: var(--red-hi);
+}
+
+.auth__lead {
+  margin: -8px 0 4px;
+  font-size: 13px;
+}
+
+.auth__foot {
+  margin: 4px 0 0;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* 字标后的闪烁方块光标 —— 既有海报的招牌细节。
+   用 steps(1,end) 而不是缓动：光标就该是硬切换。 */
+.cursor {
+  display: inline-block;
+  width: 0.5em;
+  height: 0.9em;
+  margin-left: 0.14em;
+  vertical-align: -0.08em;
+  background: var(--red);
+  animation: blink 1.1s steps(1, end) infinite;
+}
+
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 表单                                                                */
+/* ------------------------------------------------------------------ */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field__label {
+  font: 600 12px/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--mute);
+}
+
+.field__hint,
+.field__error {
+  font-size: 12px;
+}
+
+.field__error {
+  color: var(--red-hi);
+}
+
+.field input,
+.field select,
+.field textarea,
+.input {
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-surface);
+  color: var(--bone);
+  font: 500 14px/1.5 var(--mono);
+  transition: border-color var(--transition-fast);
+  width: 100%;
+}
+
+.field textarea {
+  min-height: 90px;
+  resize: vertical;
+  font-family: var(--sans);
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.input:focus {
+  outline: none;
+  border-color: var(--red-hi);
+}
+
+.field input::placeholder,
+.input::placeholder {
+  color: var(--dim);
+}
+
+.field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ------------------------------------------------------------------ */
+/* 按钮                                                                */
+/* ------------------------------------------------------------------ */
+
+.btn {
+  padding: 10px 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  font: 600 13px/1 var(--sans);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btn--primary {
+  background: var(--red);
+  color: #fff;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--red-hi);
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--bone);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.btn--danger {
+  background: transparent;
+  border-color: var(--red);
+  color: var(--red-hi);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--red-soft);
+}
+
+.btn--small {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------------ */
+/* 提示                                                                */
+/* ------------------------------------------------------------------ */
+
+.alert {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-control);
+  background: var(--red-soft);
+  color: var(--red-hi);
+  font-size: 13px;
+}
+
+.ok {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  font-size: 13px;
+}
+
+.empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ */
+/* 表格：数字与时间一律等宽，列宽稳定                                   */
+/* ------------------------------------------------------------------ */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.table th {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--mute);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.table td.num,
+.table .num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* 标签                                                                */
+/* ------------------------------------------------------------------ */
+
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  font: 600 11px/1.6 var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--mute);
+  white-space: nowrap;
+}
+
+.tag--live,
+.tag--accepted {
+  border-color: var(--red);
+  color: var(--red-hi);
+}
+
+.tag--rejected {
+  border-color: var(--line-strong);
+  color: var(--dim);
+}
+
+.tag--draft,
+.tag--reviewing {
+  border-color: var(--line-strong);
+  color: var(--mute);
+}

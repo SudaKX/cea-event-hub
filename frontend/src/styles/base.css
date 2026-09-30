@@ -1,0 +1,129 @@
+/**
+ * 基础样式：重置、排版、焦点、以及少量原子类。
+ *
+ * 刻意不使用渐变、不使用超过两档的圆角、不使用超过 200ms 的过渡 ——
+ * 这三条是设计语言的硬约束（见 web-app-shell 规格）。
+ */
+
+@import "./tokens.css";
+@import "./components.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--bone);
+  font: 15px/1.7 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 键盘焦点必须可见，且统一为亮强调色 */
+:focus-visible {
+  outline: 2px solid var(--red-hi);
+  outline-offset: 3px;
+  border-radius: var(--radius-control);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+a {
+  color: var(--red-hi);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--mono);
+}
+
+/* ------------------------------------------------------------------ */
+/* 原子类                                                              */
+/* ------------------------------------------------------------------ */
+
+.mono {
+  font-family: var(--mono);
+}
+
+/* 数字、标识、时间一律等宽：列宽稳定，扫读更快 */
+.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.mute {
+  color: var(--mute);
+}
+
+.dim {
+  color: var(--dim);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-surface);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 尊重系统的"减少动效"偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,45 @@
+/**
+ * 设计令牌 —— 唯一真源。
+ *
+ * 取值来自既有海报（posters/404.html 与 posters/index.html）的配色语言：
+ * 暗底、丝印白、单一强调红、发丝分隔线。任何界面都只能引用这里的变量，
+ * 不得写死颜色字面量。
+ *
+ * 这套令牌同时经桥接层下发给活动页（`hub:init` 的 theme 字段），使宿主与
+ * 活动页观感一致 —— 因此这里的键名是**对外契约**的一部分，改名要同步改
+ * 桥接协议。
+ */
+
+:root {
+  /* ---- 颜色 ---- */
+  --bg: #0b0b0d;                       /* 页面底色 */
+  --panel: #101014;                    /* 卡片、输入框表面 */
+  --bone: #cfcac4;                     /* 主文字（丝印白） */
+  --mute: #8b8e97;                     /* 次级文字 */
+  --dim: #5f626b;                      /* 占位与禁用 */
+  --red: #d0202f;                      /* 主强调：主操作、光标 */
+  --red-hi: #ff4a55;                   /* 亮强调：悬停、链接、焦点 */
+  --line: rgba(255, 255, 255, 0.09);   /* 发丝边框 */
+
+  /* 由令牌派生的语义色，避免各处自行拼 rgba */
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --red-soft: rgba(255, 74, 85, 0.14);
+  --overlay: rgba(0, 0, 0, 0.62);
+
+  /* ---- 字体 ---- */
+  /* 标题、标签与所有数字走等宽；正文走无衬线 */
+  --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas,
+    "Courier New", monospace;
+  --sans: "Inter", "Segoe UI", system-ui, -apple-system, "Microsoft YaHei",
+    sans-serif;
+
+  /* ---- 圆角：只有两档 ---- */
+  --radius-control: 7px;   /* 按钮 */
+  --radius-surface: 10px;  /* 输入框、卡片 */
+
+  /* ---- 动效 ---- */
+  --transition-fast: 160ms ease;
+
+  /* ---- 间距节奏 ---- */
+  --gap-rail: clamp(18px, 3.2vw, 38px);
+}

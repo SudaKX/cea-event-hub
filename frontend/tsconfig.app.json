@@ -1,10 +1,13 @@
 {
   "extends": "@vue/tsconfig/tsconfig.dom.json",
   "include": ["env.d.ts", "src/**/*", "src/**/*.vue"],
-  "exclude": ["src/**/__tests__/*"],
   "compilerOptions": {
     // Extra safety for array and object lookups, but may have false positives.
     "noUncheckedIndexedAccess": true,
+
+    // 测试文件（*.spec.ts）跑在 Node 下的 vitest 里，会用到 fs / path / process，
+    // 因此需要 Node 类型；vitest 的全局 API 也在这里声明。
+    "types": ["node", "vitest/globals"],
 
     // Path mapping for cleaner imports.
     "paths": {

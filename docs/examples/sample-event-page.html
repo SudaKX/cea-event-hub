@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>示例活动页</title>
+<!--
+  活动页接入示例。
+
+  三件必须记住的事：
+    1. 引入 SDK：<script src="/sdk/v1/cea.js"></script>
+    2. 不要试图 fetch('/api/...') —— 沙箱下这是被浏览器拦死的
+    3. 不要在这个文件里放任何秘密：/content/** 是公开可读的
+
+  这份文件连同同目录的其他资源一起打成 zip 投放即可。
+-->
+<style>
+  /* 宿主会通过 CEA.ready 下发设计令牌，这里用兜底值先渲染，
+     拿到后再覆盖，使活动页与宿主观感一致。 */
+  :root{
+    --bg:#0b0b0d; --panel:#101014; --bone:#cfcac4;
+    --mute:#8b8e97; --dim:#5f626b; --red:#d0202f; --red-hi:#ff4a55;
+    --line:rgba(255,255,255,.09);
+    --mono:ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,monospace;
+    --sans:"Inter","Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:28px 24px;background:var(--bg);color:var(--bone);
+    font:15px/1.7 var(--sans);
+  }
+  h1{margin:0 0 6px;font:700 22px/1.2 var(--mono);letter-spacing:.04em}
+  h1 em{font-style:normal;color:var(--red-hi)}
+  .lead{margin:0 0 22px;color:var(--mute);font-size:13px}
+  form{max-width:420px;display:flex;flex-direction:column;gap:14px}
+  label{display:flex;flex-direction:column;gap:6px}
+  .label{font:600 12px/1 var(--mono);letter-spacing:.08em;color:var(--mute)}
+  input,select,textarea{
+    padding:10px 12px;background:var(--bg);border:1px solid var(--line);
+    border-radius:10px;color:var(--bone);font:500 14px/1.5 var(--mono);
+    transition:border-color .16s ease;
+  }
+  textarea{min-height:80px;font-family:var(--sans)}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red-hi)}
+  button{
+    padding:11px 16px;border:0;border-radius:7px;cursor:pointer;
+    background:var(--red);color:#fff;font:600 14px/1 var(--sans);
+    transition:background .16s ease;
+  }
+  button:hover:not(:disabled){background:var(--red-hi)}
+  button:disabled{opacity:.55;cursor:progress}
+  .msg{margin:0;padding:9px 12px;border-radius:7px;font-size:13px;border:1px solid var(--line)}
+  .msg--err{border-color:var(--red);background:rgba(255,74,85,.14);color:var(--red-hi)}
+  .msg--ok{border-color:var(--line);color:var(--bone)}
+  .who{margin:0 0 18px;font:500 12px/1.6 var(--mono);color:var(--dim)}
+  .quota{margin:0 0 18px;font:500 12px/1.6 var(--mono);color:var(--mute)}
+</style>
+</head>
+<body>
+
+<h1>春季<em>招新</em></h1>
+<p class="lead">填写下面的信息即可报名。带 <span style="color:var(--red-hi)">*</span> 的为必填。</p>
+
+<p class="who" id="who">正在与宿主建立连接…</p>
+<p class="quota" id="quota"></p>
+
+<form id="form">
+  <label>
+    <span class="label">姓名 *</span>
+    <input name="name" required maxlength="32" autocomplete="name">
+  </label>
+
+  <label>
+    <span class="label">年级 *</span>
+    <select name="grade" required>
+      <option value="">请选择</option>
+      <option value="1">大一</option>
+      <option value="2">大二</option>
+      <option value="3">大三</option>
+      <option value="4">大四</option>
+    </select>
+  </label>
+
+  <label>
+    <span class="label">手机号 *</span>
+    <input name="contact" required inputmode="tel" placeholder="11 位手机号">
+  </label>
+
+  <label>
+    <span class="label">自我介绍</span>
+    <textarea name="intro" maxlength="500"></textarea>
+  </label>
+
+  <label>
+    <span class="label">作品附件<span style="color:var(--dim)">（可选，可多选）</span></span>
+    <input type="file" name="files" multiple>
+  </label>
+
+  <p class="msg" id="msg" hidden></p>
+  <button type="submit" id="submit">提交报名</button>
+</form>
+
+<!-- 必须引入：没有它活动页既无法提交，也无法与宿主通讯 -->
+<script src="/sdk/v1/cea.js"></script>
+<script>
+(async () => {
+  'use strict';
+
+  const form = document.getElementById('form');
+  const msg = document.getElementById('msg');
+  const who = document.getElementById('who');
+  const quota = document.getElementById('quota');
+  const submitButton = document.getElementById('submit');
+  const FORM_KEY = 'signup';
+
+  function show(text, kind) {
+    msg.textContent = text;
+    msg.className = 'msg' + (kind ? ' msg--' + kind : '');
+    msg.hidden = false;
+  }
+
+  // ---- 与宿主握手，拿到身份与活动信息 ----
+  let identity;
+  try {
+    identity = await CEA.ready;
+  } catch (error) {
+    // 不在 iframe 里打开、或宿主没有响应
+    who.textContent = '未连接到宿主：' + error.message;
+    submitButton.disabled = true;
+    return;
+  }
+
+  who.textContent = identity.loggedIn
+    ? '已登录：' + identity.displayName + '（' + identity.role + '）'
+    : '未登录（将以匿名身份提交）';
+
+  const event = await CEA.event();
+  if (event.quota && event.quota.remaining !== null) {
+    quota.textContent = '剩余名额：' + event.quota.remaining + ' / ' + event.quota.limit;
+    if (event.quota.remaining === 0) {
+      show('名额已满。', 'err');
+      submitButton.disabled = true;
+    }
+  }
+
+  // ---- 草稿：沙箱里没有 localStorage，由宿主代存 ----
+  const draft = await CEA.draft.load(FORM_KEY);
+  if (draft) {
+    for (const [key, value] of Object.entries(draft)) {
+      const field = form.elements[key];
+      if (field && typeof value === 'string') field.value = value;
+    }
+    show('已恢复上次未提交的内容。');
+  }
+
+  form.addEventListener('input', () => {
+    const snapshot = {};
+    for (const field of form.elements) {
+      if (field.name && field.type !== 'file') snapshot[field.name] = field.value;
+    }
+    // 每次输入都存一次；失败也不影响填写（草稿只是便利功能）
+    CEA.draft.save(snapshot, FORM_KEY).catch(() => {});
+  });
+
+  // 让宿主知道内容高度，避免 iframe 里出现双层滚动条
+  CEA.resize();
+  new ResizeObserver(() => CEA.resize()).observe(document.body);
+
+  // ---- 提交 ----
+  form.addEventListener('submit', async (event_) => {
+    event_.preventDefault();
+    submitButton.disabled = true;
+    show('提交中…');
+
+    const data = new FormData(form);
+    const payload = {
+      name: (data.get('name') || '').trim(),
+      grade: data.get('grade'),
+      contact: (data.get('contact') || '').trim(),
+      intro: (data.get('intro') || '').trim(),
+    };
+
+    const files = Array.from(form.elements.files.files || []);
+
+    try {
+      // 带不带文件都是同一次调用，SDK 会自动选择合适的端点
+      const result = await CEA.submit({
+        payload,
+        files,
+        kind: FORM_KEY,
+        // 幂等键：网络抖动导致重试时，服务端会返回原提交而不是新建一条
+        idempotencyKey: crypto.randomUUID(),
+      });
+
+      if (result.deduplicated) {
+        show('这次提交此前已经收到过了，无需重复提交。', 'ok');
+      } else {
+        show('报名成功！提交编号 #' + result.submission.id, 'ok');
+      }
+
+      form.reset();
+      await CEA.draft.clear(FORM_KEY);
+    } catch (error) {
+      // 活动页只需判断 code，不必解析 HTTP 状态码
+      switch (error.code) {
+        case 'login_required':
+          show('这个活动需要登录后才能报名。', 'err');
+          CEA.navigate('/login');
+          break;
+        case 'quota_exhausted':
+          show('名额已满，报名已结束。', 'err');
+          submitButton.disabled = true;
+          break;
+        case 'event_closed':
+          show('报名已截止。', 'err');
+          submitButton.disabled = true;
+          break;
+        case 'rate_limited':
+          show('操作过于频繁，请稍后再试。', 'err');
+          submitButton.disabled = false;
+          break;
+        case 'validation_failed':
+          // fields 里是字段级消息，可标注到对应输入框
+          show(Object.values(error.fields || {}).join('；') || '请检查填写内容。', 'err');
+          submitButton.disabled = false;
+          break;
+        default:
+          show(error.message || '提交失败，请稍后重试。', 'err');
+          submitButton.disabled = false;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>
