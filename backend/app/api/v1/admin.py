@@ -6,11 +6,18 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Response, status
+import os
+
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
 
 from app.core.deps import AdminUser, DbSession, RuntimeSettings, require_admin
 from app.core.exceptions import NotFound
 from app.schemas.auth import ResetTokenResponse
+from app.schemas.content import (
+    ContentDeployResponse,
+    ContentFileItem,
+    ContentListResponse,
+)
 from app.schemas.events import (
     EventAdminEnvelope,
     EventAdminListResponse,
@@ -19,6 +26,7 @@ from app.schemas.events import (
     to_admin,
 )
 from app.services.auth import AuthService
+from app.services.content import ContentService
 from app.services.events import EventService
 
 router = APIRouter(
@@ -120,6 +128,79 @@ def delete_event(
     EventService(settings).delete(session, event_id=event_id)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
+
+
+# ---------------------------------------------------------------------------
+# 活动内容
+# ---------------------------------------------------------------------------
+
+
+def _upload_size(upload: UploadFile) -> int:
+    """取上传体积。
+
+    Starlette 的 UploadFile 通常带 `size`，但为 None 时（例如手工构造的
+    SpooledTemporaryFile）回退到量一次长度，避免体积上限被绕过。
+    """
+    size = getattr(upload, "size", None)
+    if isinstance(size, int):
+        return size
+    stream = upload.file
+    stream.seek(0, os.SEEK_END)
+    size = stream.tell()
+    stream.seek(0)
+    return size
+
+
+@router.post(
+    "/events/{event_id}/content",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ContentDeployResponse,
+    summary="投放活动内容包（zip）",
+)
+def deploy_content(
+    event_id: str,
+    session: DbSession,
+    settings: RuntimeSettings,
+    file: UploadFile = File(...),
+) -> ContentDeployResponse:
+    """整体替换该活动的内容目录，并递增 `content_version`。
+
+    校验不通过时目标目录**完全不被触碰**，版本号也不递增——解压前已逐条校验
+    条目名、符号链接、条目数与解压体积。
+    """
+    result = ContentService(settings).deploy_archive(
+        session, event_id=event_id, stream=file.file, size_bytes=_upload_size(file)
+    )
+    return ContentDeployResponse(
+        event_id=event_id,
+        file_count=result.file_count,
+        total_bytes=result.total_bytes,
+        content_version=result.content_version,
+    )
+
+
+@router.get(
+    "/events/{event_id}/content",
+    response_model=ContentListResponse,
+    summary="活动内容清单",
+)
+def list_content(
+    event_id: str, session: DbSession, settings: RuntimeSettings
+) -> ContentListResponse:
+    service = ContentService(settings)
+    event = EventService(settings).repo.get(session, event_id)
+    if event is None:
+        raise NotFound("活动不存在")
+
+    return ContentListResponse(
+        event_id=event_id,
+        content_version=event.content_version,
+        entry_path=event.entry_path,
+        files=[
+            ContentFileItem(path=item.path, size_bytes=item.size_bytes)
+            for item in service.list_files(event_id)
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------

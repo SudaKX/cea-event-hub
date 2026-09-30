@@ -54,8 +54,22 @@ def db_session(test_db: Database) -> Iterator:
 
 
 @pytest.fixture
-def app(test_db: Database, monkeypatch: pytest.MonkeyPatch):
-    """应用实例指向临时库。
+def content_root(tmp_path) -> "Path":
+    """每个测试独立的内容/数据根目录。
+
+    不隔离的话，测试会把活动内容写进仓库里的 content/ 与 data/。
+    """
+    from pathlib import Path
+
+    root = Path(tmp_path)
+    (root / "content").mkdir(parents=True, exist_ok=True)
+    (root / "data").mkdir(parents=True, exist_ok=True)
+    return root
+
+
+@pytest.fixture
+def app(test_db: Database, monkeypatch: pytest.MonkeyPatch, content_root):
+    """应用实例指向临时库与临时内容目录。
 
     启动任务（首次引导、后续的 janitor）读的是 `app.state.database`，
     因此注入后不会碰开发库 `var/app.db`。
@@ -68,6 +82,9 @@ def app(test_db: Database, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "ADMIN_BOOTSTRAP_ENABLED", False)
     # 测试走 http，Secure Cookie 不会被回传，因此按开发环境的配置来
     monkeypatch.setattr(settings, "SESSION_COOKIE_SECURE", False)
+    # 内容与数据目录指向临时位置（StaticFiles 在 create_app 时绑定目录）
+    monkeypatch.setattr(settings, "CONTENT_DIR", content_root / "content")
+    monkeypatch.setattr(settings, "DATA_DIR", content_root / "data")
 
     application = create_app()
     application.state.database = test_db

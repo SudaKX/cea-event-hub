@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy.exc import OperationalError
 
+from app.api.content_static import ContentStaticFiles
 from app.api.v1 import api_router
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
@@ -85,6 +86,18 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router)
+
+    # 活动内容：公开只读，带 ACAO 通配头。
+    # 数据目录 /data 刻意**不**挂载——附件只能经由鉴权端点读取（不变量 6）。
+    app.mount(
+        "/content",
+        ContentStaticFiles(
+            directory=settings.CONTENT_DIR,
+            html=True,
+            cors_origin=settings.CONTENT_CORS_ALLOW_ORIGIN,
+        ),
+        name="content",
+    )
     return app
 
 
