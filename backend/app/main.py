@@ -22,7 +22,7 @@ from app.api.v1 import api_router
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.db.session import db
-from app.infra import build_rate_limiter
+from app.infra import build_email_sender, build_rate_limiter
 from app.services.bootstrap import ensure_bootstrap_admin
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,7 @@ def create_app() -> FastAPI:
     app.state.settings = settings
     app.state.database = db
     app.state.rate_limiter = build_rate_limiter(settings)
+    app.state.email_sender = build_email_sender(settings)
 
     # 刻意不注册 CORSMiddleware。
     # /api/** 必须不返回任何 CORS 响应头——这是沙箱隔离机制的一部分

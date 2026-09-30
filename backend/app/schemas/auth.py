@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from app.schemas import UserPublic
@@ -33,9 +35,39 @@ class UserEnvelope(BaseModel):
     user: UserPublic
 
 
+class ForgotPasswordRequest(BaseModel):
+    # 用邮箱发起自助找回：只有已绑定并（可选）验证过的邮箱才收得到链接
+    email: str = Field(min_length=1, max_length=255)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class TokenRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+
+
+class ResetTokenResponse(BaseModel):
+    """管理员签发重置令牌的响应。
+
+    明文**只在这里出现一次**；库里存的是摘要，因此任何后续查询都拿不到它。
+    """
+
+    user_id: int
+    username: str
+    token: str
+    expires_at: datetime
+
+
 __all__ = [
     "ChangePasswordRequest",
+    "ForgotPasswordRequest",
     "LoginRequest",
     "RegisterRequest",
+    "ResetPasswordRequest",
+    "ResetTokenResponse",
+    "TokenRequest",
     "UserEnvelope",
 ]

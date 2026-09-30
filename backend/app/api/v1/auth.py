@@ -12,6 +12,7 @@ from app.core.config import Settings
 from app.core.deps import (
     CurrentUser,
     DbSession,
+    EmailSenderDep,
     RateLimiterDep,
     RequiredUser,
     RuntimeSettings,
@@ -23,8 +24,11 @@ from app.core.deps import (
 from app.schemas import UserPublic
 from app.schemas.auth import (
     ChangePasswordRequest,
+    ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
+    ResetPasswordRequest,
+    TokenRequest,
     UserEnvelope,
 )
 from app.services.auth import AuthService
@@ -162,6 +166,93 @@ def change_password(
         current_password=payload.current_password,
         new_password=payload.new_password,
         current_token=extract_session_token(request),
+    )
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.post(
+    "/forgot-password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="发起口令找回（自助路径）",
+)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    response: Response,
+    session: DbSession,
+    limiter: RateLimiterDep,
+    settings: RuntimeSettings,
+    email_sender: EmailSenderDep,
+) -> Response:
+    """无论账号是否存在都返回 204。
+
+    区分"该邮箱已注册"与"未注册"等于免费提供一个账号枚举接口，因此响应恒为
+    成功；只有确实存在且启用时才真的发信。
+    """
+    _guard_auth_rate(request, limiter, "forgot")
+    _service(settings).request_password_reset(
+        session, identifier=payload.email, email_sender=email_sender
+    )
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.post(
+    "/reset",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="凭一次性令牌重置口令",
+)
+def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    response: Response,
+    session: DbSession,
+    limiter: RateLimiterDep,
+    settings: RuntimeSettings,
+) -> Response:
+    """两条签发路径（自助邮件 / 管理员签发）共用这一个兑换端点。"""
+    _guard_auth_rate(request, limiter, "reset")
+    _service(settings).reset_password(
+        session, token=payload.token, new_password=payload.new_password
+    )
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.post(
+    "/verify-email",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="凭令牌确认邮箱",
+)
+def verify_email(
+    payload: TokenRequest,
+    response: Response,
+    session: DbSession,
+    settings: RuntimeSettings,
+) -> Response:
+    _service(settings).verify_email(session, token=payload.token)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.post(
+    "/verify-email/request",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="重新发送邮箱验证邮件",
+)
+def request_email_verification(
+    request: Request,
+    response: Response,
+    session: DbSession,
+    user: RequiredUser,
+    limiter: RateLimiterDep,
+    settings: RuntimeSettings,
+    email_sender: EmailSenderDep,
+) -> Response:
+    _guard_auth_rate(request, limiter, "verify")
+    _service(settings).request_email_verification(
+        session, user=user, email_sender=email_sender
     )
     response.status_code = status.HTTP_204_NO_CONTENT
     return response

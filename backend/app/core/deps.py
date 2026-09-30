@@ -17,7 +17,7 @@ from app.core.clock import utcnow
 from app.core.config import Settings, settings
 from app.core.enums import UserRole
 from app.core.exceptions import Forbidden, LoginRequired, NotFound, RateLimited
-from app.core.ports import RateLimiter
+from app.core.ports import EmailSender, RateLimiter
 from app.core.security import hash_token
 from app.db.models import Event, User
 from app.db.session import Database
@@ -65,6 +65,13 @@ def get_rate_limiter(request: Request) -> RateLimiter:
 
 
 RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+
+
+def get_email_sender(request: Request) -> EmailSender:
+    return request.app.state.email_sender
+
+
+EmailSenderDep = Annotated[EmailSender, Depends(get_email_sender)]
 
 
 def enforce_rate_limit(
@@ -204,6 +211,7 @@ __all__ = [
     "CurrentEvent",
     "CurrentUser",
     "DbSession",
+    "EmailSenderDep",
     "RateLimiterDep",
     "RequiredUser",
     "RuntimeSettings",
@@ -211,6 +219,7 @@ __all__ = [
     "extract_session_token",
     "get_current_user",
     "get_db",
+    "get_email_sender",
     "get_event",
     "get_rate_limiter",
     "get_runtime_settings",

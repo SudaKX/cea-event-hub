@@ -6,14 +6,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
 from app.core.config import Settings
-from app.core.enums import UserRole
+from app.core.enums import TokenPurpose, UserRole
 from app.core.exceptions import (
     AccountDisabled,
     BadRequest,
@@ -21,9 +21,11 @@ from app.core.exceptions import (
     Forbidden,
     InvalidCredentials,
     NotFound,
+    TokenInvalid,
     UsernameTaken,
     ValidationFailed,
 )
+from app.core.ports import EmailSender
 from app.core.security import (
     generate_token,
     hash_ip,
@@ -43,6 +45,7 @@ from app.core.text import (
 )
 from app.db.models import User, UserSession
 from app.repositories.users import SessionRepository, UserRepository
+from app.services.tokens import UserTokenService
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +56,12 @@ class AuthService:
         settings: Settings,
         user_repo: UserRepository | None = None,
         session_repo: SessionRepository | None = None,
+        token_service: UserTokenService | None = None,
     ) -> None:
         self.settings = settings
         self.users = user_repo or UserRepository()
         self.sessions = session_repo or SessionRepository()
+        self.tokens = token_service or UserTokenService(settings)
 
     # ------------------------------------------------------------------
     # 注册
@@ -216,6 +221,142 @@ class AuthService:
         # 其他会话立即失效：口令变更通常意味着"我怀疑有人拿到了我的凭据"
         keep = hash_token(current_token) if current_token else None
         self.sessions.revoke_all_for_user(session, user.id, except_token_hash=keep)
+
+    # ------------------------------------------------------------------
+    # 凭据找回与邮箱验证
+    # ------------------------------------------------------------------
+
+    def request_password_reset(
+        self, session: Session, *, identifier: str, email_sender: EmailSender
+    ) -> None:
+        """发起自助找回。
+
+        无论账号是否存在、是否绑定邮箱，**都返回成功**：区分这两种情形等于免费
+        提供一个账号枚举接口。只有确实存在且处于启用状态时才真的发信。
+        """
+        if not self.settings.ALLOW_SELF_SERVICE_RESET:
+            # 未开启自助找回时静默返回：调用方是管理员签发路径
+            return
+
+        normalized = normalize_email(identifier)
+        user = self.users.get_by_email(session, normalized)
+        if user is None or not user.is_active:
+            return
+
+        self._send_reset_email(session, user=user, email_sender=email_sender)
+
+    def _send_reset_email(
+        self, session: Session, *, user: User, email_sender: EmailSender
+    ) -> str:
+        token = self.tokens.issue(
+            session, user=user, purpose=TokenPurpose.PASSWORD_RESET
+        )
+        base = self.settings.PUBLIC_BASE_URL.rstrip("/")
+        hours = self.settings.EMAIL_TOKEN_TTL_SECONDS // 3600
+        self._safe_send(
+            email_sender,
+            to=user.email or "",
+            subject="重置口令",
+            body=(
+                f"你好 {user.display_name}：\n\n"
+                "有人请求重置该账号的口令。如果这是你本人，请打开下面的链接：\n\n"
+                f"{base}/reset?token={token}\n\n"
+                f"链接 {hours} 小时内有效，且只能使用一次。"
+                "如果不是你发起的，忽略本邮件即可。\n"
+            ),
+        )
+        return token
+
+    def reset_password(
+        self, session: Session, *, token: str, new_password: str
+    ) -> User:
+        if (problem := password_shape_error(new_password)) is not None:
+            raise ValidationFailed(fields={"new_password": problem})
+
+        record = self.tokens.consume(
+            session, token=token, purpose=TokenPurpose.PASSWORD_RESET
+        )
+        user = self.users.get(session, record.user_id)
+        if user is None:
+            raise TokenInvalid()
+
+        user.password_hash = hash_password(new_password)
+        # 凭据找回的典型场景就是"我怀疑账号被人用过"，因此全部会话失效，
+        # 不保留任何既有会话
+        self.sessions.revoke_all_for_user(session, user.id)
+        return user
+
+    def request_email_verification(
+        self, session: Session, *, user: User, email_sender: EmailSender
+    ) -> str:
+        if not user.email:
+            raise ValidationFailed(fields={"email": "尚未绑定邮箱"})
+
+        token = self.tokens.issue(
+            session, user=user, purpose=TokenPurpose.EMAIL_VERIFY
+        )
+        base = self.settings.PUBLIC_BASE_URL.rstrip("/")
+        self._safe_send(
+            email_sender,
+            to=user.email,
+            subject="确认邮箱",
+            body=(
+                f"你好 {user.display_name}：\n\n"
+                "请打开下面的链接确认该邮箱地址：\n\n"
+                f"{base}/verify-email?token={token}\n\n"
+                "如果不是你发起的，忽略本邮件即可。\n"
+            ),
+        )
+        return token
+
+    def verify_email(self, session: Session, *, token: str) -> User:
+        record = self.tokens.consume(
+            session, token=token, purpose=TokenPurpose.EMAIL_VERIFY
+        )
+        user = self.users.get(session, record.user_id)
+        if user is None:
+            raise TokenInvalid()
+
+        user.email_verified_at = utcnow()
+        return user
+
+    def admin_issue_reset_token(
+        self, session: Session, *, actor: User, target_id: int
+    ) -> tuple[User, str, datetime]:
+        """管理员签发一次性重置令牌，供线下转交（邮件不可用时的路径）。
+
+        明文只在返回值里出现这一次；库里只有摘要，因此任何后续查询都拿不到它。
+        """
+        target = self._load_target(session, target_id)
+        if not target.is_active:
+            raise BadRequest("不能为已停用的账号签发重置令牌")
+
+        token = self.tokens.issue(
+            session, user=target, purpose=TokenPurpose.PASSWORD_RESET
+        )
+        record = self.tokens.peek(
+            session, token=token, purpose=TokenPurpose.PASSWORD_RESET
+        )
+        expires_at = record.expires_at if record else utcnow()
+
+        logger.info(
+            "管理员 %r 为用户 %r 签发了口令重置令牌", actor.username, target.username
+        )
+        return target, token, expires_at
+
+    @staticmethod
+    def _safe_send(
+        email_sender: EmailSender, *, to: str, subject: str, body: str
+    ) -> None:
+        """发信失败不影响接口结果。
+
+        让 SMTP 抖动变成 500 会把"邮件服务不可用"伪装成"找回功能坏了"，
+        而令牌此时已经签发且有效，用户重试即可。
+        """
+        try:
+            email_sender.send(to=to, subject=subject, body=body)
+        except Exception:
+            logger.exception("发送邮件失败（收件人 %s，主题 %s）", to, subject)
 
     # ------------------------------------------------------------------
     # 管理员操作（用户管理接口复用）
