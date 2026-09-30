@@ -1,0 +1,67 @@
+[Unit]
+Description=CEA 活动平台后端 (FastAPI)
+Documentation=https://github.com/cea/event-hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=cea
+Group=cea
+WorkingDirectory=/srv/cea/backend
+
+# ---------------------------------------------------------------------------
+# 三个启动参数各自对应一条硬约束，改动前请先读 docs/deployment.md：
+#
+#   --workers 1
+#       应用层限流是进程内内存实现。多进程会让每个进程各持一份计数，
+#       实际阈值被放大到 N 倍。SQLite 的写入本来就串行化在单写者锁上，
+#       多进程只会增加锁争用而不提升写入吞吐，因此单进程与存储模型也一致。
+#
+#   --proxy-headers --forwarded-allow-ips
+#       只信任 nginx 写入的转发头。不配置的话，客户端自己发一个
+#       X-Forwarded-For 就能把限流键算到伪造地址上，应用层限流形同虚设。
+#       这里的地址必须与 nginx 的 real_ip / proxy 配置保持一致。
+# ---------------------------------------------------------------------------
+ExecStart=/srv/cea/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 1 \
+    --proxy-headers \
+    --forwarded-allow-ips 127.0.0.1
+
+# 环境变量从 .env 读取（该文件不入库，含 IP_HASH_SALT 等密钥）
+EnvironmentFile=/srv/cea/backend/.env
+Environment=APP_ENV=production
+
+Restart=on-failure
+RestartSec=3
+
+# 优雅停机：给正在进行的上传留出时间
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# ---------------------------------------------------------------------------
+# 加固
+# ---------------------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+# 只有内容与数据目录需要可写
+ReadWritePaths=/srv/cea/content /srv/cea/data /srv/cea/var
+
+# 日志交给 journald，不额外写文件（日志轮转由 journald 负责）
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFound
 from app.core.deps import (
-    CurrentEvent,
+    LiveEvent,
     CurrentUser,
     DbSession,
     FileStorageDep,
@@ -109,7 +109,7 @@ def _parse_payload_part(raw: str | None) -> dict[str, Any]:
 def submit_json(
     payload: dict[str, Any],
     request: Request,
-    event: CurrentEvent,
+    event: LiveEvent,
     session: DbSession,
     user: CurrentUser,
     limiter: RateLimiterDep,
@@ -155,7 +155,7 @@ def submit_json(
 )
 def submit_files(
     request: Request,
-    event: CurrentEvent,
+    event: LiveEvent,
     session: DbSession,
     user: CurrentUser,
     limiter: RateLimiterDep,

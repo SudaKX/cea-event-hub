@@ -129,11 +129,17 @@ class TestRequestShapes:
     def test_unknown_event_is_404(self, client) -> None:
         assert _submit(client, event_id="nope").status_code == 404
 
-    def test_draft_event_is_closed(self, client, test_db) -> None:
+    def test_draft_event_is_404_not_403(self, client, test_db) -> None:
+        """未发布的活动一律 404。
+
+        如果这里返回 403（"活动未开放"），匿名用户就能用状态码区分
+        "这个标识存在但没上线"与"这个标识不存在" —— 公开详情接口刻意用 404
+        避免的正是这件事，两个端点必须一致。
+        """
         _seed_event(test_db, status=EventStatus.DRAFT.value)
         response = _submit(client)
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "event_closed"
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "not_found"
 
     def test_window_not_yet_open(self, client, test_db) -> None:
         _seed_event(test_db, submissions_open_at=utcnow() + timedelta(days=1))

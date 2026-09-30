@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.clientip import FORWARDED_HEADER, resolve_client_ip
 from app.core.clock import utcnow
 from app.core.config import Settings, settings
-from app.core.enums import UserRole
+from app.core.enums import EventStatus, UserRole
 from app.core.exceptions import (
     Forbidden,
     LoginRequired,
@@ -272,6 +272,21 @@ def get_event(event_id: str, session: DbSession) -> Event:
 CurrentEvent = Annotated[Event, Depends(get_event)]
 
 
+def get_live_event(event: CurrentEvent) -> Event:
+    """只解析**已发布**的活动，其余一律 404。
+
+    提交端点必须用它而不是 `get_event`：后者对草稿活动会走到"活动未开放"的
+    403，于是匿名用户可以用状态码区分"这个标识存在但没上线"与"这个标识不存在"——
+    公开详情接口刻意用 404 避免的正是这件事，两个端点必须一致。
+    """
+    if event.status != EventStatus.LIVE.value:
+        raise NotFound("活动不存在")
+    return event
+
+
+LiveEvent = Annotated[Event, Depends(get_live_event)]
+
+
 __all__ = [
     "AdminUser",
     "CurrentEvent",
@@ -279,6 +294,7 @@ __all__ = [
     "DbSession",
     "EmailSenderDep",
     "FileStorageDep",
+    "LiveEvent",
     "RateLimiterDep",
     "RequiredUser",
     "RuntimeSettings",
@@ -289,6 +305,7 @@ __all__ = [
     "get_email_sender",
     "get_event",
     "get_file_storage",
+    "get_live_event",
     "get_rate_limiter",
     "get_runtime_settings",
     "limit_by_client_ip",
