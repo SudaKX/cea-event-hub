@@ -45,17 +45,35 @@ def safe_extension(original_name: str) -> str:
     return f".{suffix}" if _SAFE_EXTENSION.match(suffix) else ""
 
 
+#: 文本中允许出现的控制字符：制表、换行、回车
+_TEXT_SAFE_CONTROL = frozenset({0x09, 0x0A, 0x0D})
+
+
 def sniff_mime(head: bytes) -> str:
+    """按字节判断类型。仅用于管理端展示，不参与任何安全判定。
+
+    判定顺序：先认魔数，再看是否含二进制控制字节，最后才试着按 UTF-8 解码。
+    少了中间那步，`\\x00\\x01\\x02` 这种内容会因为"每个字节都小于 0x80"而被
+    当成纯文本。
+    """
     for magic, mime in _MAGIC:
         if head.startswith(magic):
             return mime
-    if head and all(byte < 0x80 or byte in b"\r\n\t" for byte in head[:512]):
-        try:
-            head.decode("utf-8")
-        except UnicodeDecodeError:
-            return "application/octet-stream"
-        return "text/plain"
-    return "application/octet-stream"
+
+    if not head:
+        return "application/octet-stream"
+
+    sample = head[:512]
+    if any(
+        byte < 0x20 and byte not in _TEXT_SAFE_CONTROL for byte in sample
+    ):
+        return "application/octet-stream"
+
+    try:
+        sample.decode("utf-8")
+    except UnicodeDecodeError:
+        return "application/octet-stream"
+    return "text/plain"
 
 
 class LocalDiskStorage:

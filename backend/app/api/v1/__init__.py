@@ -17,6 +17,7 @@ api_router.include_router(auth.router)
 api_router.include_router(events.router)
 api_router.include_router(submissions.router)
 api_router.include_router(submissions.me_router)
+api_router.include_router(submissions.download_router)
 api_router.include_router(admin.router)
 
 __all__ = ["api_router"]

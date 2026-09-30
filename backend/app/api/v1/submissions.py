@@ -10,11 +10,14 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import NotFound
 from app.core.deps import (
     CurrentEvent,
     CurrentUser,
@@ -213,4 +216,80 @@ def my_submissions(
     )
 
 
-__all__ = ["me_router", "router"]
+# ---------------------------------------------------------------------------
+# 附件下载
+# ---------------------------------------------------------------------------
+
+download_router = APIRouter(prefix="/submissions", tags=["attachments"])
+
+#: 只允许这些字符进入 Content-Disposition 的 ASCII 形式。
+#: 引号与反斜杠能改写头部结构，换行能注入额外的头，控制字符同理。
+_ASCII_SAFE = re.compile(r"[^A-Za-z0-9._\- ]")
+
+
+def _content_disposition(original_name: str) -> str:
+    """构造既能被旧客户端读懂、又不会被用来注入头部的下载文件名。
+
+    非 ASCII 文件名走 RFC 5987 的 `filename*`；同时给一个降级用的 ASCII
+    `filename`，把危险字符替换掉。
+    """
+    from urllib.parse import quote
+
+    name = (original_name or "download").replace("\\", "/").split("/")[-1]
+    name = "".join(ch for ch in name if ch.isprintable()) or "download"
+
+    ascii_name = _ASCII_SAFE.sub("_", name)[:150] or "download"
+    encoded = quote(name, safe="")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
+
+
+@download_router.get(
+    "/{submission_id}/files/{file_id}",
+    summary="下载附件（提交者本人或管理员）",
+    response_class=StreamingResponse,
+)
+def download_attachment(
+    submission_id: int,
+    file_id: int,
+    session: DbSession,
+    user: RequiredUser,
+    settings: RuntimeSettings,
+    storage: FileStorageDep,
+) -> StreamingResponse:
+    """附件唯一的读取路径。
+
+    `/data` 既不静态暴露也不挂载，因此这里是拿到字节的唯一入口。响应强制
+    `attachment` + 通用二进制类型 + `nosniff`：这是"接受任意文件类型"能够成立
+    的前提——上传的 `.html` 永远不会在浏览器里被当作页面执行。
+    """
+    service = _service(settings, storage)
+
+    submission = service.submissions.get(session, submission_id)
+    if submission is None:
+        raise NotFound("附件不存在")
+
+    # 非提交者且非管理员 -> 404，而不是 403：
+    # 403 会确认"这个附件存在但不给你看"
+    service.assert_can_read_files(submission, user)
+
+    record = service.files.get(session, file_id)
+    if record is None or record.submission_id != submission_id:
+        raise NotFound("附件不存在")
+    if not storage.exists(record.event_id, record.stored_rel):
+        raise NotFound("附件不存在")
+
+    handle = storage.open(record.event_id, record.stored_rel)
+    return StreamingResponse(
+        handle,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": _content_disposition(record.original_name),
+            "Content-Length": str(record.size_bytes),
+            # 阻止浏览器自行嗅探类型后改变处理方式
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+__all__ = ["download_router", "me_router", "router"]
