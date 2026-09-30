@@ -19,10 +19,10 @@
 
 ## 3. 分层骨架与端口
 
-- [ ] 3.1 建立 `repositories/`，实现 `users` 与 `events` 仓储（纯持久化，无业务判断）；以单测覆盖查询与写入，并确认仓储层不含"能不能做"的判断为验证
-- [ ] 3.2 建立 `services/` 与领域异常定义，确立 service 不 import fastapi 的纪律；以检查 `services/` 下无 `fastapi` 导入的测试为验证
-- [ ] 3.3 实现 `core/ports.py`，以 `Protocol` 定义 `RateLimiter`、`FileStorage`、`EmailSender` 三个可替换端口；以测试替身能实现并通过类型检查为验证
-- [ ] 3.4 实现 `core/deps.py`：`get_db`、`current_user`、`require_admin`、`get_event`；以依赖覆盖测试（匿名 / 普通用户 / 管理员三态）为验证
+- [x] 3.1 建立 `repositories/`，实现 `users` 与 `events` 仓储（纯持久化，无业务判断）；以单测覆盖查询与写入，并确认仓储层不含"能不能做"的判断为验证
+- [x] 3.2 建立 `services/` 与领域异常定义，确立 service 不 import fastapi 的纪律；以检查 `services/` 下无 `fastapi` 导入的测试为验证
+- [x] 3.3 实现 `core/ports.py`，以 `Protocol` 定义 `RateLimiter`、`FileStorage`、`EmailSender` 三个可替换端口；以测试替身能实现并通过类型检查为验证
+- [x] 3.4 实现 `core/deps.py`：`get_db`、`current_user`、`require_admin`、`get_event`；以依赖覆盖测试（匿名 / 普通用户 / 管理员三态）为验证
 
 ## 4. 身份与会话
 
