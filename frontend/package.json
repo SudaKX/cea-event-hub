@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "run-p type-check \"build-only {@}\" --",
+    "dev": "npm run build:sdk && vite",
+    "build": "npm run build:sdk && run-p type-check \"build-only {@}\" --",
+    "build:sdk": "vite build --config vite.sdk.config.ts",
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
-    "test": "vitest run",
+    "test": "npm run build:sdk && vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {

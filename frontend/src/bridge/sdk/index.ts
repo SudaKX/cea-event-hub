@@ -7,6 +7,16 @@
  *
  * 活动页没有凭据、没有本地存储、不能直接 fetch `/api`（那是浏览器强制的边界）。
  * 它只能通过这里的方法请求宿主代办。
+ *
+ * ## 本文件不允许有**运行时导出**
+ *
+ * 产物靠 `window.CEA = api` 挂载，而不是靠打包器的 `lib.name`。一旦存在运行时
+ * 导出，Rollup 就会为 IIFE 生成 `var CEA = <exports>`，在全局作用域把这个名字
+ * **覆盖**掉 —— 模块内那句 `window.CEA = api` 白写了，活动页拿到的是一个空对象，
+ * 表现为 `CEA.ready` 是 undefined、`await CEA.ready` 得到 undefined。
+ *
+ * 因此 `CeaRequestError` 等一律不加 `export`；`interface` / `type` 会被类型擦除，
+ * 不产生运行时导出，可以放心导出。
  */
 
 import {
@@ -26,7 +36,8 @@ export interface CeaError {
   fields?: Record<string, string>
 }
 
-export class CeaRequestError extends Error {
+/** 有意不加 `export`：见文件头关于"运行时导出"的说明。 */
+class CeaRequestError extends Error {
   readonly code: BridgeErrorCode
   readonly fields?: Record<string, string>
 
@@ -292,7 +303,12 @@ const api: CeaApi = {
   },
 }
 
-// 暴露全局对象。活动页只需 `<script src="/sdk/v1/cea.js"></script>` 然后 `CEA.submit(...)`
+// 暴露全局对象。活动页只需 `<script src="/sdk/v1/cea.js"></script>`
+// 然后 `CEA.submit(...)`。
+//
+// 刻意**不做 default export**：这是一个经典脚本，产物挂在 window 上，
+// 导出对活动页没有任何意义，而且混用具名导出与默认导出会让打包器警告
+// "consumers will have to use CEA.default"。
 declare global {
   interface Window {
     CEA: CeaApi
@@ -300,5 +316,3 @@ declare global {
 }
 
 window.CEA = api
-
-export default api

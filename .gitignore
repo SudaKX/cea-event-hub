@@ -13,6 +13,10 @@ htmlcov/
 # ---- Node ----
 node_modules/
 
+# SDK 构建产物：由 npm run build:sdk 产出到 public/ 下，供开发时静态提供，
+# 并随构建复制进 dist/。构建产物不入库。
+frontend/public/sdk/
+
 # ---- 后端环境变量（含密钥，绝不入库）----
 backend/.env
 backend/.env.*
