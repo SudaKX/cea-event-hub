@@ -24,9 +24,11 @@ function make(props: Record<string, unknown> = {}) {
   })
 }
 
-/** 打开菜单并等 openMenu 内部的 nextTick 落地 */
+/** 打开菜单并等 openMenu 内部的 nextTick 落地。两种模式的触发方式不同 */
 async function openMenu(wrapper: ReturnType<typeof make>) {
-  await wrapper.find('.select__trigger').trigger('click')
+  const search = wrapper.find('input.select__search')
+  if (search.exists()) await search.trigger('focus')
+  else await wrapper.find('button.select__trigger').trigger('click')
   await wrapper.vm.$nextTick()
   await wrapper.vm.$nextTick()
 }
@@ -279,13 +281,18 @@ describe('键盘', () => {
     const wrapper = make()
     await openMenu(wrapper)
 
-    const trigger = wrapper.find('.select__trigger')
-    await trigger.trigger('keydown', { key: 'Tab' })
+    // 先把焦点放到组件外面，才能验"没有被抢回来"
+    const outside = document.createElement('input')
+    document.body.appendChild(outside)
+    outside.focus()
+
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'Tab' })
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
-    // Tab 是"我要走了"，此时把焦点抢回按钮会打断键盘用户
-    expect(document.activeElement).not.toBe(trigger.element)
+    // Tab 是"我要走了"，此时把焦点抢回控件会打断键盘用户
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
     wrapper.unmount()
   })
 
@@ -429,6 +436,118 @@ describe('整体禁用', () => {
 
     expect(trigger.attributes('disabled')).toBeDefined()
     await trigger.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* 失焦与鼠标点击的交互                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 这一组是回归测试，对应一个真实缺陷：**鼠标点选项没反应，但回车可以**。
+ *
+ * 原因是 `<li>` 不可聚焦，`mousedown` 的默认动作会让控件失焦，`focusout` 随之
+ * 以 `relatedTarget = null` 触发；当时的处理会因此关掉菜单，于是**等着被点的
+ * 那个选项在 `click` 派发之前就从 DOM 里消失了**。回车不受影响，因为焦点全程
+ * 没离开控件。
+ *
+ * 原有测试没能发现它，是因为它们只用 `trigger('click')` —— happy-dom 不会因为
+ * `mousedown` 而失焦，真实的失焦序列从未被模拟过。所以下面显式模拟它。
+ */
+describe('失焦与鼠标点击', () => {
+  for (const searchable of [false, true]) {
+    const mode = searchable ? '搜索模式' : '按钮模式'
+
+    it(`${mode}：控件失焦到 null 时不关闭，选项仍在 DOM 里可点`, async () => {
+      const wrapper = searchable ? makeSearchable() : make()
+      await openMenu(wrapper)
+      expect(wrapper.find('[role="option"]').exists()).toBe(true)
+
+      // mousedown 的默认动作：控件失焦，而 <li> 不可聚焦所以 relatedTarget 是 null
+      const control = wrapper.find('.select__trigger')
+      await control.trigger('focusout', { relatedTarget: null })
+      await wrapper.vm.$nextTick()
+
+      // 浏览器此刻才要派发 click —— 它必须还有东西可点
+      expect(wrapper.find('[role="option"]').exists()).toBe(true)
+      expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it(`${mode}：在选项上按下鼠标不会夺走焦点`, async () => {
+      const wrapper = searchable ? makeSearchable() : make()
+      await openMenu(wrapper)
+
+      const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+      wrapper.findAll('[role="option"]')[0]!.element.dispatchEvent(event)
+
+      // preventDefault 挡住了默认的焦点转移 —— 这是第一道防线
+      expect(event.defaultPrevented).toBe(true)
+      wrapper.unmount()
+    })
+
+    it(`${mode}：焦点移到组件外的真实元素时关闭`, async () => {
+      const wrapper = searchable ? makeSearchable() : make()
+      await openMenu(wrapper)
+
+      const outside = document.createElement('input')
+      document.body.appendChild(outside)
+
+      await wrapper
+        .find('.select__trigger')
+        .trigger('focusout', { relatedTarget: outside })
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+      outside.remove()
+      wrapper.unmount()
+    })
+
+    it(`${mode}：完整的 mousedown -> click 序列能选中`, async () => {
+      const wrapper = searchable ? makeSearchable() : make()
+      await openMenu(wrapper)
+
+      const option = wrapper.findAll('[role="option"]')[1]!
+      await option.trigger('mousedown')
+      await option.trigger('click')
+
+      expect(wrapper.emitted('update:modelValue')).toHaveLength(1)
+      expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+      wrapper.unmount()
+    })
+  }
+
+  it('点尖角按钮同样能开合，并把焦点交给控件', async () => {
+    const wrapper = make()
+    await wrapper.find('.select__caret').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+    // 焦点在控件上，键盘导航随之可用；否则点完尖角再按方向键会毫无反应
+    expect(document.activeElement).toBe(wrapper.find('.select__trigger').element)
+    wrapper.unmount()
+  })
+
+  it('尖角在打开时点击则关闭', async () => {
+    const wrapper = make()
+    await openMenu(wrapper)
+    await wrapper.find('.select__caret').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('禁用后关闭已展开的面板', async () => {
+    const wrapper = make()
+    await openMenu(wrapper)
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+
+    await wrapper.setProps({ disabled: true })
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
     wrapper.unmount()

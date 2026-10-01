@@ -141,6 +141,9 @@ async function openMenu(preferLast = false): Promise<void> {
   await nextTick()
   measureDirection()
   scrollActiveIntoView()
+  // 显式把焦点放到控件上：从尖角打开时它本来没有焦点，不给的话键盘导航会失灵
+  if (props.searchable) search.value?.focus()
+  else trigger.value?.focus()
 }
 
 function closeMenu(restoreFocus = true): void {
@@ -255,10 +258,22 @@ function onSearchFocus(): void {
   void openMenu()
 }
 
-/** 焦点离开整个组件时关闭（例如 Tab 走开），避免留下一个悬空的面板 */
+/**
+ * 焦点离开整个组件时关闭。
+ *
+ * **`relatedTarget` 为 null 时不关。** 那不是"焦点去了别处"，而是"焦点哪儿也没去"
+ * —— 点了不可聚焦的元素、或整个窗口失焦。点面板内部恰恰走这条路：`<li>` 不可
+ * 聚焦，`mousedown` 的默认动作会让控件失焦、`relatedTarget` 为 null，若此时关掉
+ * 菜单，等着被点的那个选项就从 DOM 里消失了，`click` 再也落不到它上面 ——
+ * 表现就是"鼠标点了没反应，但回车可以"。
+ *
+ * 点外部由 document 上的 `mousedown` 兜住（它比 `focusout` 更早触发），所以这里
+ * 放宽不会漏掉真正的"点到外面去了"。
+ */
 function onFocusOut(event: FocusEvent): void {
   const next = event.relatedTarget as Node | null
-  if (next && root.value?.contains(next)) return
+  if (!next) return
+  if (root.value?.contains(next)) return
   closeMenu(false)
 }
 
@@ -405,7 +420,12 @@ onBeforeUnmount(() => {
         </span>
       </button>
 
-      <span class="select__caret" aria-hidden="true" @click="open ? closeMenu() : openMenu()" />
+      <span
+        class="select__caret"
+        aria-hidden="true"
+        @mousedown.prevent
+        @click="open ? closeMenu() : openMenu()"
+      />
 
       <ul
         v-if="open"
@@ -416,6 +436,7 @@ onBeforeUnmount(() => {
         role="listbox"
         :aria-labelledby="nameFrom"
         :aria-label="nameText"
+        @mousedown.prevent
       >
         <li
           v-for="(option, index) in items"
