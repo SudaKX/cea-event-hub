@@ -22,7 +22,7 @@
  * - **超长列表滚动**：见 `.select__list` 的 `max-height` + `overflow-y`，
  *   并且键盘移动时活动项会自动滚入视野。
  *
- * ## 两种模式：为什么搜索框就是触发器本身
+ * ## 两种模式：搜索框就是触发器本身
  *
  * `searchable` 打开时**可以**搜索：输入即过滤（子串匹配，不区分大小写）。
  *
@@ -38,6 +38,10 @@
  * 还在编辑 —— 无论鼠标选还是键盘选。把"可编辑"与"已选中"交给两个元素表达，
  * 这个矛盾才根本消失，而且鼠标与键盘可以走同一条焦点路径（都交回按钮），
  * 键盘用户选完接着 Tab 也不会丢位置。
+ *
+ * 代价是**两个元素的默认盒模型不同**，切换时会有高度与配色上的跳变。那几处都在
+ * 样式里逐条钉死了（`min-height`、`--has-selection`、尖角的 `transform`），
+ * 否则点一下控件就会"闪"一下。
  *
  * ## 与原生控件的差距（已知且接受）
  *
@@ -76,22 +80,26 @@ const props = withDefaults(
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
+// ---------------------------------------------------------------- 状态
+
 const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
 const search = ref<HTMLInputElement | null>(null)
-const list = ref<HTMLElement | null>(null)
+const panel = ref<HTMLElement | null>(null)
 
 const open = ref(false)
 const activeIndex = ref(-1)
 /** 向上展开。打开时按视口空间测量一次 */
 const dropUp = ref(false)
-/** 搜索框里的内容。只在实际输入时有值，关闭后丢弃 */
+/** 搜索关键词。关闭即丢弃 */
 const query = ref('')
 
 const uid = useId()
 const listId = computed(() => `${uid}-list`)
 const labelId = computed(() => `${uid}-label`)
 const optionId = (index: number) => `${uid}-opt-${index}`
+
+// ---------------------------------------------------------------- 派生
 
 /** 过滤后的候选项。非搜索模式或没有关键词时就是全部 */
 const items = computed<SelectOption[]>(() => {
@@ -100,19 +108,20 @@ const items = computed<SelectOption[]>(() => {
   return props.options.filter((option) => option.label.toLowerCase().includes(needle))
 })
 
-const selectedIndex = computed(() =>
-  items.value.findIndex((option) => option.value === props.modelValue),
-)
-
 const selectedLabel = computed(
   () => props.options.find((option) => option.value === props.modelValue)?.label ?? '',
 )
 
+/** 选中项在**当前可见列表**中的位置；被过滤掉时为 -1 */
+const visibleSelectedIndex = computed(() =>
+  items.value.findIndex((option) => option.value === props.modelValue),
+)
+
 /**
- * 输入框里的灰字提示。
+ * 打开时输入框里的灰字提示。
  *
- * 输入框**只在打开时存在**，所以这里直接把当前选中项当提示 —— 搜索时关键词一
- * 清空，至少还看得见自己选的是什么。
+ * 它承载的是"当前选中项"，不是"请选择"，所以样式上要跟正文同色（见
+ * `.select__search--has-selection`）—— 否则点开的一瞬间文字会由亮变暗。
  */
 const searchPlaceholder = computed(() => selectedLabel.value || props.placeholder)
 
@@ -124,37 +133,67 @@ const activeDescendant = computed(() =>
 const nameFrom = computed(() => (props.label ? labelId.value : undefined))
 const nameText = computed(() => (props.label ? undefined : props.ariaLabel))
 
-/** 找第一个可用项。`delta` 为负时从末尾往前找。 */
-function firstEnabled(delta = 1): number {
-  const count = items.value.length
-  for (let step = 0; step < count; step += 1) {
-    const index = delta > 0 ? step : count - 1 - step
-    if (!items.value[index]?.disabled) return index
+// ---------------------------------------------------------------- 索引
+
+/**
+ * 列表里第一个可用项的位置。`delta` 为负时从末尾往前找。
+ *
+ * 列表显式传进来而不是闭包捕获 `items`：调用方有时要对"即将生效的列表"求值，
+ * 隐式捕获会让那种调用看起来像在读写同一份数据。
+ */
+function firstEnabled(list: SelectOption[], delta = 1): number {
+  for (let step = 0; step < list.length; step += 1) {
+    const index = delta > 0 ? step : list.length - 1 - step
+    if (!list[index]?.disabled) return index
   }
   return -1
 }
 
 /**
+ * **安全网**：活动项必须始终指向一个可用项，否则键盘会停在一个不存在的位置上。
+ *
+ * 这里只做"修正"不做"重置" —— 不能一有变化就跳回第一项，因为父组件每次渲染都
+ * 可能传来新的 options 数组，那样键盘导航会被反复打断。
+ * "打完字从第一项开始"是**意图**，由 `onSearchInput` 自己表达。
+ */
+watch(items, (list) => {
+  const current = list[activeIndex.value]
+  if (current && !current.disabled) return
+  activeIndex.value = firstEnabled(list, 1)
+})
+
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled) closeMenu(false)
+  },
+)
+
+// ---------------------------------------------------------------- 开合
+
+/**
  * 打开面板。
  *
- * `seed` 用于"关闭状态下直接打字"：那一下按键要带进搜索词，否则用户得先按
- * Enter 打开、再重新打一遍。
+ * - `preferLast`：`↑` 从关闭状态打开时落到最末可用项，与原生一致
+ * - `seed`：关闭状态下直接打字时，把那一下按键带进搜索词，否则用户得先按
+ *   Enter 打开、再重新打一遍
  */
-async function openMenu(preferLast = false, seed = ''): Promise<void> {
+async function openMenu({ preferLast = false, seed = '' } = {}): Promise<void> {
   if (props.disabled || open.value) return
   open.value = true
   query.value = seed
 
+  // 没有搜索词时停在选中项上；有搜索词说明用户要重新找，从第一项开始
   activeIndex.value =
-    selectedIndex.value >= 0 && !seed
-      ? selectedIndex.value
-      : firstEnabled(preferLast ? -1 : 1)
+    visibleSelectedIndex.value >= 0 && !seed
+      ? visibleSelectedIndex.value
+      : firstEnabled(items.value, preferLast ? -1 : 1)
 
   await nextTick()
   measureDirection()
   scrollActiveIntoView()
-  // 显式把焦点放到控件上：从尖角打开时它本来没有焦点，不给的话键盘导航会失灵。
-  // 打开后控件已经是输入框（搜索模式），这里等 nextTick 就是为了拿到它。
+  // 打开后控件已经是输入框（搜索模式），等 nextTick 就是为了拿到它。
+  // 从尖角打开时控件本来没有焦点，不显式给的话键盘导航会失灵。
   if (props.searchable) search.value?.focus()
   else trigger.value?.focus()
 }
@@ -163,11 +202,11 @@ function closeMenu(restoreFocus = true): void {
   if (!open.value) return
   open.value = false
   dropUp.value = false
-  // 关掉就把关键词丢掉 —— 否则下次打开会带着上次的搜索词，看到一个残缺的列表
   query.value = ''
+  typed = ''
 
   // 焦点必须**等重新渲染之后**再放：搜索模式下这一步会把输入框换成按钮，
-  // 立刻 focus 会 focus 到那个马上要被卸载的输入框上。
+  // 立刻 focus 会落到那个马上要被卸载的输入框上。
   if (restoreFocus) void nextTick(() => trigger.value?.focus())
 }
 
@@ -178,38 +217,39 @@ function closeMenu(restoreFocus = true): void {
  * 触发器贴着视口底部时，向上翻也救不了多少。
  */
 function measureDirection(): void {
-  // 打开时可搜索模式是输入框、否则是按钮，取存在的那个
   const control = search.value ?? trigger.value
-  const listEl = list.value
-  if (!control || !listEl) return
+  const panelEl = panel.value
+  if (!control || !panelEl) return
 
   const rect = control.getBoundingClientRect()
   const spaceBelow = window.innerHeight - rect.bottom
-  const needed = listEl.offsetHeight + 8
+  const needed = panelEl.offsetHeight + 8
   dropUp.value = spaceBelow < needed && rect.top > spaceBelow
 }
 
 function scrollActiveIntoView(): void {
-  const el = list.value?.querySelector<HTMLElement>('[data-active="true"]')
+  const el = panel.value?.querySelector<HTMLElement>('[data-active="true"]')
   // happy-dom 等环境可能没有实现；缺了只是不滚动，不该让组件报错
   el?.scrollIntoView?.({ block: 'nearest' })
 }
 
+// ---------------------------------------------------------------- 选择
+
 /** 按方向移到下一个可用项，跳过禁用项并环绕。 */
 function move(delta: number): void {
-  const count = items.value.length
-  if (count === 0) return
+  const list = items.value
+  if (list.length === 0) return
 
   if (activeIndex.value < 0) {
-    activeIndex.value = firstEnabled(delta)
+    activeIndex.value = firstEnabled(list, delta)
     void nextTick(scrollActiveIntoView)
     return
   }
 
   let index = activeIndex.value
-  for (let step = 0; step < count; step += 1) {
-    index = (index + delta + count) % count
-    if (!items.value[index]?.disabled) {
+  for (let step = 0; step < list.length; step += 1) {
+    index = (index + delta + list.length) % list.length
+    if (!list[index]?.disabled) {
       activeIndex.value = index
       void nextTick(scrollActiveIntoView)
       return
@@ -222,10 +262,6 @@ function move(delta: number): void {
  *
  * **鼠标与键盘走同一条路径**，因为焦点交给的是"关闭后的那个按钮"，而按钮不显示
  * 文本光标 —— 既不会看起来像还在编辑，键盘用户选完接着 Tab 也不会丢位置。
- *
- * 早先的版本按"鼠标还是键盘"分叉：鼠标选完失焦、键盘选完保留焦点。那是错的，
- * 因为真正的区别不是输入设备，而是**控件此刻是否可编辑**。搜索模式下控件一度
- * 始终是输入框，于是键盘选完必然留着光标 —— 分叉只是在给这个错误设计打补丁。
  */
 function choose(option: SelectOption): void {
   if (option.disabled) return
@@ -243,13 +279,14 @@ function hover(index: number, option: SelectOption): void {
   activeIndex.value = index
 }
 
-/* ---- 首字母跳转（非搜索模式）：连打字母按前缀查找，500ms 后重置 ---- */
+// ---------------------------------------------------------------- 首字母跳转
+
+/** 连打字母的缓冲。连按同一个字母表示轮换，而不是攒成 "aa"（那匹配不到东西）。 */
 let typed = ''
 let typedTimer: ReturnType<typeof setTimeout> | undefined
 
 function typeAhead(char: string): void {
   const lower = char.toLowerCase()
-  // 连按同一个字母 = 轮换，而不是把缓冲变成 "aa"（那什么也匹配不到）
   const cycling = typed.length > 0 && [...typed].every((item) => item === lower)
   typed = cycling ? lower : typed + lower
 
@@ -258,14 +295,15 @@ function typeAhead(char: string): void {
     typed = ''
   }, 500)
 
-  const count = items.value.length
-  if (count === 0) return
+  const list = items.value
+  if (list.length === 0) return
 
-  // 搜索始终从列表开头开始；"打首字母"的预期是找到它，不是找当前位置之后的下一个
+  // 搜索从列表开头开始；"打首字母"的预期是找到它，不是找当前位置之后的下一个。
+  // 轮换时才从当前项之后继续。
   const start = cycling ? activeIndex.value + 1 : 0
-  for (let step = 0; step < count; step += 1) {
-    const index = (start + step + count) % count
-    const option = items.value[index]
+  for (let step = 0; step < list.length; step += 1) {
+    const index = (start + step + list.length) % list.length
+    const option = list[index]
     if (option && !option.disabled && option.label.toLowerCase().startsWith(typed)) {
       if (!open.value) void openMenu()
       activeIndex.value = index
@@ -275,10 +313,13 @@ function typeAhead(char: string): void {
   }
 }
 
+// ---------------------------------------------------------------- 事件
+
 function onSearchInput(event: Event): void {
   query.value = (event.target as HTMLInputElement).value
-  // 过滤后原来的活动项可能已经不在了，落到第一个可用项
-  activeIndex.value = firstEnabled(1)
+  // 表达**意图**：改过关键词就从第一项重新开始，而不是让高亮留在原来的位置上
+  // （那个位置在新列表里已经没有意义了）。安全网是上面那个 watch。
+  activeIndex.value = firstEnabled(items.value, 1)
 }
 
 /**
@@ -310,7 +351,7 @@ function onTriggerKeydown(event: KeyboardEvent): void {
       const delta = event.key === 'ArrowDown' ? 1 : -1
       if (open.value) move(delta)
       // 关闭状态下 ↑ 与原生一致：打开并落到最末可用项
-      else void openMenu(delta === -1)
+      else void openMenu({ preferLast: delta === -1 })
       return
     }
     case 'Enter':
@@ -334,14 +375,14 @@ function onTriggerKeydown(event: KeyboardEvent): void {
     case 'Home':
       if (open.value) {
         event.preventDefault()
-        activeIndex.value = firstEnabled(1)
+        activeIndex.value = firstEnabled(items.value, 1)
         void nextTick(scrollActiveIntoView)
       }
       return
     case 'End':
       if (open.value) {
         event.preventDefault()
-        activeIndex.value = firstEnabled(-1)
+        activeIndex.value = firstEnabled(items.value, -1)
         void nextTick(scrollActiveIntoView)
       }
       return
@@ -355,9 +396,8 @@ function onTriggerKeydown(event: KeyboardEvent): void {
       if (!printable) return
 
       if (props.searchable) {
-        // 关闭时控件是按钮，直接打字说明想搜索：打开并把这一下带进搜索词，
-        // 否则用户得先按 Enter 打开、再重新打一遍
-        if (!open.value) void openMenu(false, event.key)
+        // 关闭时控件是按钮，直接打字说明想搜索
+        if (!open.value) void openMenu({ seed: event.key })
         return
       }
       typeAhead(event.key)
@@ -372,17 +412,10 @@ function onDocumentPointerDown(event: MouseEvent): void {
   closeMenu(false)
 }
 
-/** 候选项变少时别让活动项停在越界位置 */
-watch(items, (list_) => {
-  if (activeIndex.value >= list_.length) activeIndex.value = list_.length - 1
-})
-
-watch(
-  () => props.disabled,
-  (disabled) => {
-    if (disabled) closeMenu(false)
-  },
-)
+function toggle(): void {
+  if (open.value) closeMenu()
+  else void openMenu()
+}
 
 onMounted(() => document.addEventListener('mousedown', onDocumentPointerDown))
 onBeforeUnmount(() => {
@@ -408,15 +441,15 @@ onBeforeUnmount(() => {
             所以选完之后不会看起来像还在编辑
           - 打开且可搜索时才换成输入框
 
-        早先的版本在搜索模式下"永远"用输入框，于是只要它还聚焦着就有光标，
-        选完也像没选完。把"可编辑"和"已选中"这两种状态交给两个元素表达，
-        这个矛盾才消失。
+        两个元素的外观差异（高度、文字颜色）都在样式里对齐了，否则切换时
+        控件会闪一下。
       -->
       <input
         v-if="searchable && open"
         ref="search"
         type="text"
         class="input select__trigger select__search"
+        :class="{ 'select__search--has-selection': !!selectedLabel }"
         role="combobox"
         aria-haspopup="listbox"
         :aria-expanded="open"
@@ -446,7 +479,7 @@ onBeforeUnmount(() => {
         :aria-labelledby="nameFrom"
         :aria-label="nameText"
         :disabled="disabled"
-        @click="open ? closeMenu() : openMenu()"
+        @click="toggle"
         @keydown="onTriggerKeydown"
       >
         <span class="select__value" :class="{ 'select__value--empty': !selectedLabel }">
@@ -454,19 +487,15 @@ onBeforeUnmount(() => {
         </span>
       </button>
 
-      <span
-        class="select__caret"
-        aria-hidden="true"
-        @mousedown.prevent
-        @click="open ? closeMenu() : openMenu()"
-      />
+      <span class="select__caret" aria-hidden="true" @mousedown.prevent @click="toggle" />
 
+      <!-- 列表与"无匹配"共用面板样式，两者互斥渲染 -->
       <ul
-        v-if="open"
+        v-if="open && items.length > 0"
         :id="listId"
-        ref="list"
-        class="select__list"
-        :class="{ 'select__list--up': dropUp }"
+        ref="panel"
+        class="select__panel select__list"
+        :class="{ 'select__panel--up': dropUp }"
         role="listbox"
         :aria-labelledby="nameFrom"
         :aria-label="nameText"
@@ -491,12 +520,21 @@ onBeforeUnmount(() => {
         >
           {{ option.label }}
         </li>
-
-        <!-- 搜不到东西时给一句话，而不是一个空气泡 -->
-        <li v-if="items.length === 0" class="select__empty" role="presentation">
-          没有匹配的选项
-        </li>
       </ul>
+
+      <!--
+        空结果放在 listbox **外面**：listbox 里只该有 option，塞一句提示进去是
+        无效结构。放外面并加 aria-live，读屏才会念出"没有匹配的选项"。
+      -->
+      <p
+        v-else-if="open"
+        ref="panel"
+        class="select__panel select__empty"
+        :class="{ 'select__panel--up': dropUp }"
+        aria-live="polite"
+      >
+        没有匹配的选项
+      </p>
     </div>
   </div>
 </template>
@@ -512,16 +550,20 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
-/* 外观复用 .input（共享样式里与 input/textarea 同一套），
-   这里只补它作为按钮/输入框需要的那几项 */
+/*
+  外观复用 .input（共享样式里与 input/textarea 同一套），这里补三件事：
+
+  1. 给尖角让位，否则长文本会钻到它底下
+  2. **统一最小高度**。`<button>` 按内容行盒算高、`<input>` 按字体度量算高，
+     两者差 1–3px；控件在两者之间切换时，整个控件连同下方内容都会位移一下。
+     用同一个最小高度把这件事钉死：1.5em 行高 + 上下 padding 20px + 上下边框 2px。
+  3. 左对齐（按钮默认居中）
+*/
 .select__trigger {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  min-height: calc(1.5em + 22px);
+  padding-right: 34px;
   text-align: left;
   cursor: pointer;
-  /* 给右侧的尖角让位，否则长文本会钻到它底下 */
-  padding-right: 34px;
 }
 
 .select__trigger:disabled {
@@ -538,7 +580,25 @@ onBeforeUnmount(() => {
   color: var(--dim);
 }
 
+/*
+  打开时输入框的灰字提示承载的是"当前选中项"，不是"请选择"。
+  用正文色而不是占位色 —— 否则点开的一瞬间那行字会由亮变暗，看起来像闪了一下。
+*/
+.select__search--has-selection::placeholder {
+  color: var(--bone);
+}
+
+/*
+  打开期间边框就该是红的，不依赖 `:focus`。
+  切换元素的那一帧焦点是断的（按钮已卸载、输入框还没聚焦），只靠 `:focus`
+  会先按灰边框渲染再过渡到红，变成一次可见的渐变。
+*/
+.select--open .select__trigger {
+  border-color: var(--red-hi);
+}
+
 .select__value {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -549,49 +609,57 @@ onBeforeUnmount(() => {
   color: var(--dim);
 }
 
-/* 用两条边转出一个尖角，而不是引图标字体或 SVG。
-   绝对定位：两种模式的触发器高度不同，这样不用各写一套 */
+/*
+  用两条边转出一个尖角，而不是引图标字体或 SVG。
+
+  位置只由 `top` + `margin-top` 决定且**不随开合变化**，开合只改 `transform`：
+  早先版本在打开时把 margin-top 从 -5px 改成 -2px，位移没有过渡、旋转有过渡，
+  于是尖角一边平滑旋转一边瞬移 3px，看着像抖了一下。
+*/
 .select__caret {
   position: absolute;
   top: 50%;
   right: 12px;
   width: 7px;
   height: 7px;
-  margin-top: -5px;
+  margin-top: -3.5px;
   border-right: 1.5px solid var(--mute);
   border-bottom: 1.5px solid var(--mute);
-  transform: rotate(45deg);
+  transform: translateY(-2px) rotate(45deg);
   transition: transform var(--transition-fast);
   cursor: pointer;
 }
 
 .select--open .select__caret {
-  margin-top: -2px;
-  transform: rotate(-135deg);
+  transform: translateY(2px) rotate(-135deg);
   border-color: var(--red-hi);
 }
 
-.select__list {
+/* 列表与空结果共用的面板外观 */
+.select__panel {
   position: absolute;
   z-index: 20;
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  margin: 0;
-  padding: 4px;
-  list-style: none;
-  /* 超过这个高度就在列表内部滚动，而不是把页面撑长 */
-  max-height: 260px;
-  overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-surface);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
 }
 
-.select__list--up {
+.select__panel--up {
   top: auto;
   bottom: calc(100% + 4px);
+}
+
+.select__list {
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  /* 超过这个高度就在列表内部滚动，而不是把页面撑长 */
+  max-height: 260px;
+  overflow-y: auto;
 }
 
 .select__option {
@@ -628,7 +696,8 @@ onBeforeUnmount(() => {
 }
 
 .select__empty {
-  padding: 10px;
+  margin: 0;
+  padding: 12px 10px;
   font-size: 12.5px;
   color: var(--dim);
   text-align: center;

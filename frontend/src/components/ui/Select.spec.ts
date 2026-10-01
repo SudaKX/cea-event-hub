@@ -5,6 +5,9 @@
  * 白送的全部职责。所以测试重点不在渲染，而在**那些被接手的职责**：键盘导航、
  * ARIA 接线、点外部关闭、跳过禁用项。少一样就是一次可访问性回归。
  */
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { mount } from '@vue/test-utils'
 import { defineComponent, ref } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
@@ -710,6 +713,107 @@ describe('卸载', () => {
     wrapper.unmount()
     expect(remove).toHaveBeenCalledWith('mousedown', expect.any(Function))
     remove.mockRestore()
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* 切换时不闪                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 控件在按钮与输入框之间切换（见组件头部说明），而这两个元素的默认外观不同，
+ * 不对齐就会在点开的一瞬间"闪"一下。这一组把这些对齐措施钉住。
+ *
+ * 前三条只能做**源码断言** —— 测试环境（happy-dom）没有 CSS 引擎，算不出样式。
+ * 这比不测强：它锁住的是"这几条对齐措施还在"，删掉或改错会被立刻发现。
+ */
+describe('切换时不闪', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/components/ui/Select.vue'), 'utf-8')
+
+  it('触发器有最小高度，抹平按钮与输入框的高度差', () => {
+    // <button> 按内容行盒算高、<input> 按字体度量算高，差 1–3px，
+    // 切换时整个控件连同下方内容都会位移
+    const rule = /\.select__trigger\s*\{[^}]*\}/.exec(source)?.[0] ?? ''
+    expect(rule).toContain('min-height')
+  })
+
+  it('尖角开合只改 transform，不改 margin', () => {
+    // 早先版本打开时把 margin-top 从 -5px 改成 -2px：位移没有过渡、旋转有过渡，
+    // 于是尖角一边平滑旋转一边瞬移，看着像抖了一下
+    const openRule = /\.select--open \.select__caret\s*\{[^}]*\}/.exec(source)?.[0] ?? ''
+    expect(openRule).toContain('transform')
+    expect(openRule).not.toContain('margin')
+  })
+
+  it('打开时的红边框由状态类给出，不只靠 :focus', () => {
+    // 切换元素的那一帧焦点是断的（按钮已卸载、输入框还没聚焦），
+    // 只靠 :focus 会先按灰边框渲染再过渡到红
+    expect(source).toMatch(/\.select--open \.select__trigger\s*\{[^}]*border-color/)
+  })
+
+  it('灰字提示承载选中项时用正文色', () => {
+    // 否则点开时那行字会由 --bone 变成 --dim，看起来像闪了一下。
+    // 具体的类绑定由下面两条断言。
+    expect(source).toMatch(
+      /\.select__search--has-selection::placeholder\s*\{[^}]*var\(--bone\)/,
+    )
+  })
+
+  it('打开且已选中时，输入框确实带上了标记类', async () => {
+    const wrapper = makeSearchable({ modelValue: 'workshop' })
+    await openMenu(wrapper)
+
+    expect(searchInput(wrapper).classes()).toContain('select__search--has-selection')
+    wrapper.unmount()
+  })
+
+  it('没有选中项时不带标记类（"请选择"仍用占位色）', async () => {
+    const wrapper = makeSearchable({ modelValue: '' })
+    await openMenu(wrapper)
+
+    expect(searchInput(wrapper).classes()).not.toContain('select__search--has-selection')
+    wrapper.unmount()
+  })
+
+  it('无匹配提示在 listbox 之外，并会被读屏播报', async () => {
+    // listbox 里只该有 option，塞一句提示进去是无效结构
+    const wrapper = makeSearchable()
+    await openMenu(wrapper)
+    await searchInput(wrapper).setValue('zzzz')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    const empty = wrapper.find('.select__empty')
+    expect(empty.exists()).toBe(true)
+    expect(empty.attributes('aria-live')).toBe('polite')
+    // 提示本身不该自称是 option
+    expect(empty.attributes('role')).toBeUndefined()
+    wrapper.unmount()
+  })
+})
+
+describe('首字母缓冲', () => {
+  it('关闭会重置缓冲，不会把上次的字母带进下一次', async () => {
+    // 缓冲原本只靠 500ms 计时器清空。若在窗口内关闭再打开，上次的字母会残留，
+    // 与新的字母拼成谁也匹配不到的串，表现为"首字母跳转时好时坏"
+    const wrapper = make()
+    await openMenu(wrapper)
+
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'r' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'Escape' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    // 重新打开后打 'a'：应当按 'a' 找，而不是按 'ra'
+    await openMenu(wrapper)
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'a' })
+    await wrapper.vm.$nextTick()
+
+    const id = wrapper.find('.select__trigger').attributes('aria-activedescendant')
+    expect(wrapper.find(`#${id}`).text()).toBe('accepted')
+    wrapper.unmount()
   })
 })
 
