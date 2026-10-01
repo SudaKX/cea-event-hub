@@ -60,6 +60,61 @@ class TestPureInjection:
     def test_plain_page_has_no_reference(self) -> None:
         assert not has_sdk_reference("<html><head></head><body>hi</body></html>")
 
+    # ------------------------------------------------------------------
+    # 这两组是"用解析器而不是正则"的全部理由。正则会把插入点放进注释或脚本
+    # 字符串里 —— 标签等于没插，SDK 不加载，而页面看上去一切正常。
+    # ------------------------------------------------------------------
+
+    def test_head_close_inside_a_comment_is_ignored(self) -> None:
+        html = (
+            "<html><head>"
+            "<!-- 说明：</head> 这串字出现在注释里 -->"
+            "<title>t</title>"
+            "</head><body>hi</body></html>"
+        )
+        result = inject_sdk_tag(html, src="/sdk/v1/cea.js")
+
+        # 必须插在真正的 </head> 之前，也就是注释结束之后
+        assert result.index(SDK_ELEMENT_ID) > result.index("-->")
+        assert result.index(SDK_ELEMENT_ID) < result.rindex("</head>")
+        assert "<!-- 说明：</head> 这串字出现在注释里 -->" in result
+
+    def test_head_close_inside_a_script_string_is_ignored(self) -> None:
+        html = (
+            "<html><head>"
+            "<script>var s = \"</head>\";</script>"
+            "<title>t</title>"
+            "</head><body>hi</body></html>"
+        )
+        result = inject_sdk_tag(html, src="/sdk/v1/cea.js")
+
+        # 插在真正的 </head> 前，而不是脚本字符串那个假的之后
+        assert result.index(SDK_ELEMENT_ID) < result.rindex("</head>")
+        assert result.index(SDK_ELEMENT_ID) > result.index("</script>")
+
+    def test_reference_only_in_a_comment_still_injects(self) -> None:
+        """注释里提了一句不算引用。
+
+        按子串判断会因此**跳过注入**，页面拿不到 SDK —— 这个方向的误判代价更大。
+        """
+        html = (
+            "<html><head>"
+            "<!-- 记得写 <script src=\"/sdk/v1/cea.js\"></script> -->"
+            "</head><body>hi</body></html>"
+        )
+        assert not has_sdk_reference(html)
+        assert SDK_ELEMENT_ID in inject_sdk_tag(html, src="/sdk/v1/cea.js")
+
+    def test_id_reference_in_a_comment_does_not_count(self) -> None:
+        html = f'<html><head><!-- id="{SDK_ELEMENT_ID}" --></head><body>x</body></html>'
+        assert not has_sdk_reference(html)
+
+    def test_reference_with_query_string_is_detected(self) -> None:
+        assert has_sdk_reference('<script src="/sdk/v1/cea.js?v=2"></script>')
+
+    def test_unrelated_script_is_not_a_reference(self) -> None:
+        assert not has_sdk_reference('<script src="/sdk/v1/other.js"></script>')
+
     def test_inserts_before_head_close(self) -> None:
         html = "<html><head><title>t</title></head><body>hi</body></html>"
         result = inject_sdk_tag(html, src="/sdk/v1/cea.js")
