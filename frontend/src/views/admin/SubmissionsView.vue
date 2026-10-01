@@ -6,7 +6,7 @@
  * 而不是预设一份清单 —— 平台并不知道各活动会用什么标签。
  */
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 import { listAdminEvents } from '@/api/events'
@@ -18,6 +18,7 @@ import {
   reviewSubmission,
 } from '@/api/submissions'
 import CellText from '@/components/ui/CellText.vue'
+import Modal from '@/components/ui/Modal.vue'
 import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import {
@@ -33,6 +34,7 @@ import type { EventAdmin, Submission } from '@/types/api'
 
 const events = ref<EventAdmin[]>([])
 const eventId = ref('')
+const route = useRoute()
 const kind = ref('')
 const status = ref('')
 const page = ref(1)
@@ -40,6 +42,8 @@ const pageSize = ref(20)
 
 /** 正在查看详情的那一条；null 表示对话框关着 */
 const detail = ref<Submission | null>(null)
+/** 审核动作说明弹窗 */
+const helpOpen = ref(false)
 
 const submissions = ref<Submission[]>([])
 const total = ref(0)
@@ -71,6 +75,19 @@ async function loadEvents(): Promise<void> {
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '加载活动失败'
   }
+}
+
+/**
+ * 从查询串里取活动标识，作为**初始选中项**。
+ *
+ * 活动详情页的「查看该活动的提交」靠它落到正确的活动上 —— 否则会默认选第一个，
+ * 而用户刚看的往往不是第一个。只在列表加载出来之后才认它，避免选到一个不存在
+ * （或已删除）的活动，那样页面会空着且看不出原因。
+ */
+function applyEventFromQuery(): void {
+  const wanted = route.query.event
+  if (typeof wanted !== 'string' || !wanted) return
+  if (events.value.some((item) => item.id === wanted)) eventId.value = wanted
 }
 
 async function loadSubmissions(): Promise<void> {
@@ -176,6 +193,8 @@ watch([eventId, kind, status], () => {
 
 onMounted(async () => {
   await loadEvents()
+  // 查询串要在活动列表就位之后再认，否则没法判断它是否指向一个存在的活动
+  applyEventFromQuery()
   await loadSubmissions()
 })
 </script>
@@ -184,7 +203,21 @@ onMounted(async () => {
   <section class="stack">
     <header class="head">
       <div>
-        <h1 class="head__title">提交</h1>
+        <h1 class="head__title">
+          提交
+          <!--
+            说明收进这个按钮里，而不是铺一张常驻卡片：它是读一次就够的内容，
+            常驻只会把真正要看的东西往下挤。
+          -->
+          <button
+            class="help"
+            type="button"
+            aria-label="审核动作说明"
+            @click="helpOpen = true"
+          >
+            ?
+          </button>
+        </h1>
         <p class="mute head__lead">审核与清理。删除会立即释放该活动占用的名额。</p>
       </div>
       <button
@@ -198,27 +231,29 @@ onMounted(async () => {
     </header>
 
     <!--
-      这三个动作容易被当成同一件事，实际差别很大，尤其"拒绝"并不释放名额 ——
-      满额活动上如果只拒绝不删除，活动仍然是满的。
+      三个动作容易被当成同一件事，实际差别很大，尤其"不采用"并不释放名额 ——
+      满额活动上如果只标不采用不删除，活动仍然是满的。
     -->
-    <dl class="legend panel">
-      <div class="legend__item">
-        <dt class="mono">接受 / 拒绝</dt>
-        <dd>只改审核状态，供你自己归档。<strong>不删除数据，也不释放名额。</strong></dd>
-      </div>
-      <div class="legend__item">
-        <dt class="mono">删除</dt>
-        <dd>真正移除该条提交及其附件，并在同一事务里<strong>释放一个名额</strong>。</dd>
-      </div>
-      <div class="legend__item">
-        <dt class="mono">状态</dt>
-        <dd>
-          <span class="tag tag--received">1 待处理</span> 新提交的初始状态 ·
-          <span class="tag tag--accepted">2 已采用</span> 通过 ·
-          <span class="tag tag--ignored">0 不采用</span> 不通过（**不释放名额**）
-        </dd>
-      </div>
-    </dl>
+    <Modal class="help-modal" :open="helpOpen" title="审核动作说明" @close="helpOpen = false">
+      <dl class="legend">
+        <div class="legend__item">
+          <dt class="mono">采用 / 不采用</dt>
+          <dd>只改审核状态，供你自己归档。<strong>不删除数据，也不释放名额。</strong></dd>
+        </div>
+        <div class="legend__item">
+          <dt class="mono">删除</dt>
+          <dd>真正移除该条提交及其附件，并在同一事务里<strong>释放一个名额</strong>。</dd>
+        </div>
+        <div class="legend__item">
+          <dt class="mono">状态</dt>
+          <dd>
+            <span class="tag tag--received">1 待处理</span> 新提交的初始状态 ·
+            <span class="tag tag--accepted">2 已采用</span> 采用 ·
+            <span class="tag tag--ignored">0 不采用</span> 不采用（<strong>不释放名额</strong>）
+          </dd>
+        </div>
+      </dl>
+    </Modal>
 
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
 
@@ -383,12 +418,41 @@ onMounted(async () => {
   gap: 14px;
 }
 
+/*
+  标题右侧的 `?`。做得小而不抢眼 —— 它是"需要时查一下"的入口，
+  不该和标题争注意力。
+*/
+.help {
+  width: 20px;
+  height: 20px;
+  margin-left: 6px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  vertical-align: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--mute);
+  font: 600 12px/1 var(--mono);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.help:hover,
+.help:focus-visible {
+  color: var(--red-hi);
+  border-color: var(--red-hi);
+}
+
+/* 说明内容在弹窗里，不再是常驻卡片，所以不带外边距与内边距 */
 .legend {
   margin: 0;
-  padding: 14px 18px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   font-size: 12.5px;
 }
 

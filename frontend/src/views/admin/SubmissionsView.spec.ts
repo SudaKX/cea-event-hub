@@ -80,8 +80,12 @@ async function mountView() {
   return wrapper
 }
 
+/**
+ * 详情对话框。页面上还有另一个 dialog（帮助弹窗），所以必须指名道姓 ——
+ * `find('dialog')` 会取到文档里第一个。
+ */
 const dialog = (wrapper: ReturnType<typeof mount>) =>
-  wrapper.find('dialog').element as HTMLDialogElement
+  wrapper.find('.detail-modal').element as HTMLDialogElement
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -97,7 +101,7 @@ describe('点行看详情', () => {
     await wrapper.findAll('tbody tr')[1]!.trigger('click')
 
     expect(dialog(wrapper).open).toBe(true)
-    expect(wrapper.find('.detail__title').text()).toContain('#2')
+    expect(wrapper.find('.detail-modal .modal__title').text()).toContain('#2')
     wrapper.unmount()
   })
 
@@ -223,6 +227,78 @@ describe('提交者那一列的截断', () => {
     const wrapper = await mountView()
 
     expect(wrapper.find('td.kind-cell .cell').text()).toBe('signup')
+    wrapper.unmount()
+  })
+})
+
+describe('审核说明收在 ? 按钮里', () => {
+  const helpDialog = (wrapper: ReturnType<typeof mount>) =>
+    wrapper.find('.help-modal').element as HTMLDialogElement
+
+  it('页面上没有常驻的说明卡片', async () => {
+    // 读一次就够的内容常驻，只会把真正要看的东西往下挤
+    const wrapper = await mountView()
+
+    expect(wrapper.find('.legend').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('标题右侧有 ? 按钮', async () => {
+    const wrapper = await mountView()
+
+    const help = wrapper.find('.help')
+    expect(help.exists()).toBe(true)
+    expect(help.text()).toBe('?')
+    expect(help.attributes('aria-label')).toBe('审核动作说明')
+    wrapper.unmount()
+  })
+
+  it('点 ? 弹出说明', async () => {
+    const wrapper = await mountView()
+    expect(helpDialog(wrapper).open).toBe(false)
+
+    await wrapper.find('.help').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(helpDialog(wrapper).open).toBe(true)
+    expect(wrapper.find('.help-modal').text()).toContain('不释放名额')
+    wrapper.unmount()
+  })
+
+  it('说明里讲清"不采用"与"删除"的区别', async () => {
+    // 最容易误判的一条：标成不采用并不腾出名额
+    const wrapper = await mountView()
+    await wrapper.find('.help').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const text = wrapper.find('.help-modal').text()
+    expect(text).toContain('采用 / 不采用')
+    expect(text).toContain('删除')
+    expect(text).toContain('释放一个名额')
+    wrapper.unmount()
+  })
+
+  it('关掉之后不再显示', async () => {
+    const wrapper = await mountView()
+    await wrapper.find('.help').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    helpDialog(wrapper).close()
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    expect(helpDialog(wrapper).open).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('打开说明不会影响提交详情那一个', async () => {
+    // 两个 dialog 各管各的，别串了
+    const wrapper = await mountView()
+
+    await wrapper.find('.help').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(dialog(wrapper).open).toBe(false)
     wrapper.unmount()
   })
 })

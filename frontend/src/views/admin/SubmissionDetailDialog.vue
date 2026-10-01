@@ -2,23 +2,17 @@
 /**
  * 提交详情对话框。
  *
- * 用原生 `<dialog>` + `showModal()`，而不是自己搓一个遮罩层：顶层渲染（不用跟
- * z-index 打架）、焦点陷阱、`Esc` 关闭、`::backdrop` 全是白送的。自己实现这四样
- * 很容易漏掉焦点陷阱，而漏掉之后键盘用户会 tab 到背后的页面上。
- *
- * 对话框**始终在 DOM 里**（只是没打开），因为 `showModal()` 需要一个已挂载的元素。
- * 内容用 `v-if` 控制。
+ * `<dialog>` 的开合、焦点陷阱、遮罩点击这些接线都在 `Modal` 里，这里只负责内容。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed } from 'vue'
 
 import { attachmentUrl } from '@/api/submissions'
+import Modal from '@/components/ui/Modal.vue'
 import { payloadDisplay, payloadJson, statusLabel, statusTone } from '@/domain/submission'
 import type { Submission } from '@/types/api'
 
 const props = defineProps<{ submission: Submission | null }>()
 const emit = defineEmits<{ close: [] }>()
-
-const dialog = ref<HTMLDialogElement | null>(null)
 
 const display = computed(() =>
   props.submission ? payloadDisplay(props.submission.payload) : null,
@@ -32,54 +26,16 @@ function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
-
-/**
- * 让对话框的开合跟上 `submission`。
- *
- * `flush: 'post'` 是必须的：`showModal()` 要求元素已挂载，而模板 ref 在渲染后才
- * 绑上。
- */
-function sync(value: Submission | null): void {
-  const element = dialog.value
-  if (!element) return
-  if (value && !element.open) element.showModal()
-  else if (!value && element.open) element.close()
-}
-
-watch(() => props.submission, sync, { flush: 'post', immediate: true })
-
-// `immediate` 那一次跑在模板 ref 绑定之前（那时 dialog 还是 null），所以挂载后
-// 再补一次。少了它，"挂载时就带着一条提交"的用法会静默地不打开。
-onMounted(() => sync(props.submission))
-
-/** 点遮罩关闭。`<dialog>` 默认不这么做，但用户的预期是点了外面就该关 */
-function onBackdropClick(event: MouseEvent): void {
-  if (event.target === dialog.value) emit('close')
-}
 </script>
 
 <template>
-  <!-- `@close` 覆盖 Esc 与 close() 两条路径，统一往上抛 -->
-  <dialog
-    ref="dialog"
-    class="detail"
-    aria-labelledby="detail-title"
+  <Modal
+    class="detail-modal"
+    :open="submission !== null"
+    :title="submission ? `提交 #${submission.id}` : ''"
     @close="emit('close')"
-    @click="onBackdropClick"
   >
-    <!--
-      布局放在这层内层容器上，而不是 `<dialog>` 本身：在 dialog 上写 `display`
-      会盖掉浏览器默认的 `dialog:not([open]) { display: none }`，让关闭状态的
-      对话框依然占位显示。
-    -->
-    <div v-if="submission" class="detail__body">
-      <header class="detail__head">
-        <h2 id="detail-title" class="detail__title">提交 #{{ submission.id }}</h2>
-        <button class="btn btn--ghost btn--small" type="button" @click="emit('close')">
-          关闭
-        </button>
-      </header>
-
+    <template v-if="submission">
       <dl class="detail__meta">
         <div class="detail__pair">
           <dt>提交者</dt>
@@ -126,57 +82,21 @@ function onBackdropClick(event: MouseEvent): void {
           </li>
         </ul>
       </section>
-    </div>
-  </dialog>
+    </template>
+  </Modal>
 </template>
 
 <style scoped>
 /*
-  **这个规则块里绝不能出现 `display`。**
-  作者样式里的 `display` 会盖掉浏览器默认的 `dialog:not([open]) { display: none }`
-  —— 于是关闭状态的对话框依然会被渲染，页面上凭空多出一块空卡片。
-  布局交给内层的 .detail__body，这里只管外观与尺寸。
+  外壳（尺寸、边框、遮罩、开合）都在 Modal 里，这里只排内容。
+  元信息两列排布：窄屏自动落成一列
 */
-.detail {
-  width: min(720px, 92vw);
-  max-height: 86vh;
-  padding: 20px 22px 24px;
-  overflow: auto;
-  background: var(--panel);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-surface);
-  color: var(--bone);
-}
-
-.detail__body {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.detail::backdrop {
-  background: var(--overlay);
-}
-
-.detail__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.detail__title {
-  font-size: 16px;
-}
-
-/* 元信息两列排布：窄屏自动落成一列 */
 .detail__meta {
   margin: 0;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px 20px;
-  padding: 14px 0;
-  border-top: 1px solid var(--line);
+  padding: 0 0 14px;
   border-bottom: 1px solid var(--line);
 }
 

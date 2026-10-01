@@ -1,27 +1,15 @@
 /**
- * 提交详情对话框。
+ * 提交详情对话框的**内容**。
  *
- * 用原生 `<dialog>` + `showModal()`，所以这里既验证内容渲染，也验证"打开与关闭"
- * 这条容易做错的链路：`showModal` 必须在元素已挂载后调用，而 `@close` 要能覆盖
- * Esc 与 close() 两条路径。
+ * 开合、遮罩、焦点陷阱这些外壳行为都在 `Modal` 里，由 `Modal.spec.ts` 覆盖；
+ * 这里只管"这一条提交要显示成什么样"。
  */
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import SubmissionDetailDialog from './SubmissionDetailDialog.vue'
 import { SUBMISSION_STATUS } from '@/domain/submission'
 import type { Submission } from '@/types/api'
-
-const source = readFileSync(
-  resolve(process.cwd(), 'src/views/admin/SubmissionDetailDialog.vue'),
-  'utf-8',
-)
-
-/** 剥掉注释再断言：注释里出现的属性名会让 toContain 假阳性 */
-const withoutComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '')
 
 function submission(overrides: Partial<Submission> = {}): Submission {
   return {
@@ -80,23 +68,6 @@ describe('开合', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.emitted('close')).toHaveLength(1)
-    wrapper.unmount()
-  })
-
-  it('点遮罩关闭', async () => {
-    // <dialog> 默认不这么做，但用户预期是点了外面就该关
-    const wrapper = make({ submission: submission() })
-    await wrapper.find('dialog').trigger('click')
-
-    expect(wrapper.emitted('close')).toHaveLength(1)
-    wrapper.unmount()
-  })
-
-  it('点内容不关闭', async () => {
-    const wrapper = make({ submission: submission() })
-    await wrapper.find('.detail__title').trigger('click')
-
-    expect(wrapper.emitted('close')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -185,43 +156,10 @@ describe('内容', () => {
     expect(wrapper.text()).toContain('99')
     wrapper.unmount()
   })
-})
 
-describe('关闭时不留占位', () => {
-  /*
-    这一组对应一个真实缺陷：页面上凭空多出一块空卡片。
-
-    原因是把 `display: flex` 写在了 `<dialog>` 上 —— 作者样式的 `display` 会盖掉
-    浏览器默认的 `dialog:not([open]) { display: none }`，于是关闭状态的对话框
-    依然被渲染。布局挪进内层容器之后，那条默认样式始终有效。
-
-    测试环境没有布局引擎，算不出"可见/不可见"，所以这里断言的是**不变量本身**：
-    dialog 的规则块里不许出现 display。
-  */
-  const dialogRule = withoutComments(/\.detail\s*\{[^}]*\}/.exec(source)?.[0] ?? '')
-  const bodyRule = withoutComments(/\.detail__body\s*\{[^}]*\}/.exec(source)?.[0] ?? '')
-
-  it('dialog 自身的样式里没有 display', () => {
-    expect(dialogRule.length).toBeGreaterThan(0)
-    expect(dialogRule).not.toContain('display')
-  })
-
-  it('flex 布局在内层容器上', () => {
-    expect(bodyRule).toContain('display: flex')
-    expect(bodyRule).toContain('flex-direction: column')
-  })
-
-  it('模板里确实套了那层内层容器', () => {
+  it('标题带上提交编号，一眼知道在看哪一条', () => {
     const wrapper = make({ submission: submission() })
-    expect(wrapper.find('dialog > .detail__body').exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('关闭时内容整块不渲染，只留一个空的 dialog 壳', async () => {
-    // 内容跟着 v-if 走，所以关闭态连 DOM 都没有，不存在"看不见但占位"
-    const wrapper = make()
-    expect(wrapper.find('.detail__body').exists()).toBe(false)
-    expect(wrapper.find('dialog').element.childElementCount).toBe(0)
+    expect(wrapper.find('.modal__title').text()).toBe('提交 #42')
     wrapper.unmount()
   })
 })

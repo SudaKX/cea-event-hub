@@ -1,23 +1,12 @@
 <script setup lang="ts">
-/** 活动详情：编辑策略、投放内容、查看该活动的提交。 */
+/** 活动详情：编辑策略、投放内容。提交的查看与审核在「提交」页。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } from '@/api/events'
-import { deleteSubmission, listEventSubmissions, reviewSubmission } from '@/api/submissions'
-import { attachmentUrl } from '@/api/submissions'
-import CellText from '@/components/ui/CellText.vue'
-import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
-import {
-  SUBMISSION_STATUS,
-  payloadSummary,
-  statusLabel,
-  statusTone,
-} from '@/domain/submission'
-import SubmissionDetailDialog from './SubmissionDetailDialog.vue'
-import type { ContentFile, EventAdmin, Submission } from '@/types/api'
+import type { ContentFile, EventAdmin } from '@/types/api'
 
 const props = defineProps<{ eventId: string }>()
 
@@ -31,21 +20,11 @@ const STATUS_OPTIONS: SelectOption[] = [
 const router = useRouter()
 const event = ref<EventAdmin | null>(null)
 const files = ref<ContentFile[]>([])
-const submissions = ref<Submission[]>([])
-const total = ref(0)
-const page = ref(1)
-const pageSize = ref(20)
-/** 正在查看详情的那一条；null 表示对话框关着 */
-const detail = ref<Submission | null>(null)
 const error = ref('')
 const notice = ref('')
 const loading = ref(true)
 const busy = ref(false)
 const archive = ref<File | null>(null)
-
-const pageCount = computed(() =>
-  Math.max(1, Math.ceil(total.value / Math.max(1, pageSize.value))),
-)
 
 const form = ref({
   title: '',
@@ -84,54 +63,10 @@ async function loadDetail(): Promise<void> {
   }
 }
 
-/**
- * 只拉一页提交。
- *
- * 翻页、审核都走这里，不碰表单也不重取内容。
- */
-async function loadSubmissions(): Promise<void> {
-  const list = await listEventSubmissions(props.eventId, {
-    page: page.value,
-    page_size: pageSize.value,
-  })
-  submissions.value = list.submissions
-  total.value = list.total
-
-  // 删到当前页空了就退一页 —— 否则会停在一个已经不存在的页码上，看到一片空白
-  if (page.value > pageCount.value) {
-    page.value = pageCount.value
-    await loadSubmissions()
-  }
-}
-
-/** 删除会改变配额，但**不该重置表单** —— 所以只重取活动本身 */
-async function refreshQuota(): Promise<void> {
-  event.value = await getAdminEvent(props.eventId)
-}
-
-/**
- * 翻页与改每页条数走**显式处理函数**而不是 watch。
- *
- * 因为 `loadSubmissions` 里有个"当前页越界就退一页"的自我修正，用 watch 的话那次
- * 修正会再触发一次 watch，同一个动作发两次请求。
- */
-function onPageChange(next: number): void {
-  page.value = next
-  void loadSubmissions()
-}
-
-function onPageSizeChange(next: number): void {
-  pageSize.value = next
-  // 每页条数变了必须回到第一页，否则会停在一个可能已不存在的页码上
-  page.value = 1
-  void loadSubmissions()
-}
-
 async function load(): Promise<void> {
   loading.value = true
   try {
     await loadDetail()
-    await loadSubmissions()
     error.value = ''
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '加载失败'
@@ -176,39 +111,6 @@ async function onDeploy(): Promise<void> {
   }
 }
 
-async function onReview(submission: Submission, status: number): Promise<void> {
-  try {
-    await reviewSubmission(submission.id, status)
-    // 只改了状态，重取这一页就够了
-    await loadSubmissions()
-  } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '操作失败'
-  }
-}
-
-async function onDeleteSubmission(submission: Submission): Promise<void> {
-  if (!window.confirm('删除这条提交？它占用的名额会立即释放。')) return
-  try {
-    await deleteSubmission(submission.id)
-    // 配额变了要刷新活动，但表单不动 —— 管理员可能正在改它
-    await Promise.all([loadSubmissions(), refreshQuota()])
-  } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '删除失败'
-  }
-}
-
-/**
- * 点整行看详情。
- *
- * 行内还有操作按钮，它们有自己的行为 —— 把它们的点击也当成"看详情"会让人在删除
- * 的同时弹出一个对话框。所以先判断点到了什么。
- */
-function onRowClick(event: MouseEvent, item: Submission): void {
-  const target = event.target as HTMLElement | null
-  if (target?.closest('button, a, input, label')) return
-  detail.value = item
-}
-
 async function onDeleteEvent(): Promise<void> {
   if (!window.confirm(`删除活动 ${props.eventId}？提交与附件会一并移除，不可撤销。`)) return
   try {
@@ -226,14 +128,8 @@ function onFileChange(input: Event): void {
 
 onMounted(load)
 
-// 路由参数变化时组件会被复用，不监听就会停在上一个活动的数据上（顺带把页码归位）
-watch(
-  () => props.eventId,
-  async () => {
-    page.value = 1
-    await load()
-  },
-)
+// 路由参数变化时组件会被复用，不监听就会停在上一个活动的数据上
+watch(() => props.eventId, load)
 </script>
 
 <template>
@@ -315,112 +211,21 @@ watch(
         </ul>
       </div>
 
-      <!-- 提交 -->
+      <!--
+        提交：这里只留入口，列表与审核都在「提交」页。
+        同一份列表放两处，两边迟早会漂移出不一致（筛选、分页、权限各自一套）。
+      -->
       <div class="panel block">
-        <!--
-          总数交给 Pager 显示，这里不重复一遍 —— 两个地方各显示一份数字，
-          迟早会出现对不上的时候。
-        -->
         <h2 class="block__title">提交</h2>
-
-        <p v-if="submissions.length === 0" class="empty">还没有提交。</p>
-        <!-- 列宽固定，理由同提交页：内容长度不受控，不钉死列宽会撑开整列 -->
-        <table v-else class="table table--fixed">
-          <thead>
-            <tr>
-              <th class="col-id">#</th>
-              <th class="col-submitter">提交者</th>
-              <th class="col-kind">分类</th>
-              <th class="col-payload">内容</th>
-              <th class="col-files">附件</th>
-              <th class="col-status">状态</th>
-              <th class="col-time">时间</th>
-              <th class="col-actions">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="item in submissions"
-              :key="item.id"
-              class="row--clickable"
-              @click="onRowClick($event, item)"
-            >
-              <td class="num">
-                <!-- 整行可点只对鼠标友好，键盘用户需要这个真正的控件 -->
-                <button class="row-link" type="button" @click="detail = item">
-                  {{ item.id }}
-                </button>
-              </td>
-              <td class="num submitter">
-                <!--
-                  匿名标识是 `a:<uuid>`，38 个字符，远超这一列宽度，必须截断。
-                  标签不能跟着被截 —— 它才是这一列真正要看的信息。
-                -->
-                <CellText class="submitter__id" :text="item.submitter" />
-                <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
-              </td>
-              <td class="num kind-cell">
-                <CellText :text="item.kind" />
-              </td>
-              <td class="payload-cell">
-                <!-- 按原始键值展示，不假设字段语义；$display 只影响摘要那一行 -->
-                <CellText :text="payloadSummary(item.payload)" />
-              </td>
-              <td>
-                <a
-                  v-for="file in item.files"
-                  :key="file.id"
-                  class="mono file-link"
-                  :href="attachmentUrl(item.id, file.id)"
-                >
-                  {{ file.original_name }}
-                </a>
-                <span v-if="item.files.length === 0" class="dim">—</span>
-              </td>
-              <td>
-                <span class="tag" :class="`tag--${statusTone(item.status)}`">
-                  {{ statusLabel(item.status) }}
-                </span>
-              </td>
-              <td class="num dim">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</td>
-              <td class="actions">
-                <button
-                  class="btn btn--ghost btn--small"
-                  title="标记为已采用。只改状态，不删数据、不释放名额。"
-                  @click="onReview(item, SUBMISSION_STATUS.ACCEPTED)"
-                >
-                  采用
-                </button>
-                <button
-                  class="btn btn--ghost btn--small"
-                  title="标记为不采用。提交仍会留在列表里，仍占用名额；要腾出名额请用「删除」。"
-                  @click="onReview(item, SUBMISSION_STATUS.IGNORED)"
-                >
-                  不采用
-                </button>
-                <button
-                  class="btn btn--danger btn--small"
-                  title="删除该条提交及其附件，并释放一个名额。不可撤销。"
-                  @click="onDeleteSubmission(item)"
-                >
-                  删除
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <Pager
-          :page="page"
-          :page-size="pageSize"
-          :total="total"
-          @update:page="onPageChange"
-          @update:page-size="onPageSizeChange"
-        />
+        <p class="mute block__lead">当前配额：{{ quotaText }}</p>
+        <RouterLink
+          class="btn btn--ghost btn--small"
+          :to="{ name: 'admin-submissions', query: { event: eventId } }"
+        >
+          查看该活动的提交
+        </RouterLink>
       </div>
     </template>
-
-    <SubmissionDetailDialog :submission="detail" @close="detail = null" />
   </section>
 </template>
 
@@ -481,99 +286,5 @@ watch(
   gap: 12px;
   padding: 4px 0;
   border-bottom: 1px solid var(--line);
-}
-
-/*
-  固定列宽。`table-layout: fixed` 让宽度只由这些类决定，不再随内容抖动 ——
-  这正是"定宽 + 截断"能成立的前提。内容列拿剩下的空间。
-*/
-.table--fixed {
-  table-layout: fixed;
-}
-
-.col-id {
-  width: 64px;
-}
-
-.col-submitter {
-  width: 168px;
-}
-
-.col-kind {
-  width: 96px;
-}
-
-.col-files {
-  width: 140px;
-}
-
-.col-status {
-  width: 88px;
-}
-
-.col-time {
-  width: 168px;
-}
-
-.col-actions {
-  width: 210px;
-}
-
-/* 固定布局下长串默认会撑破单元格，这里允许它被截断 */
-.table--fixed td {
-  overflow: hidden;
-}
-
-/* 整行可点：给鼠标用户一个更大的目标，也给"这行有详情"一个视觉暗示 */
-.row--clickable {
-  cursor: pointer;
-}
-
-/*
-  提交者那一格：标识占满剩余宽度并被截断，标签保持完整。
-  `.submitter__id` 落在子组件根元素上 —— Vue 会把父组件的 scope 属性也加到子组件
-  根节点，所以这条规则能生效。
-*/
-.submitter {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.submitter__id {
-  flex: 1;
-  min-width: 0;
-}
-
-.row--clickable:hover {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-/* 编号做成按钮，作为键盘可达的入口。去掉按钮的外观，只留可点与焦点态 */
-.row-link {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--red-hi);
-  font: inherit;
-  cursor: pointer;
-}
-
-.row-link:hover {
-  text-decoration: underline;
-}
-
-.file-link {
-  display: block;
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.actions {
-  display: flex;
-  gap: 6px;
-  white-space: nowrap;
 }
 </style>
