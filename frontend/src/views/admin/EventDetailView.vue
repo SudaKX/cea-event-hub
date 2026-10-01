@@ -7,9 +7,17 @@ import { ApiError } from '@/api/client'
 import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } from '@/api/events'
 import { deleteSubmission, listEventSubmissions, reviewSubmission } from '@/api/submissions'
 import { attachmentUrl } from '@/api/submissions'
+import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import type { ContentFile, EventAdmin, Submission } from '@/types/api'
 
 const props = defineProps<{ eventId: string }>()
+
+/** 状态选项把后果写在标签里 —— 光看 draft/live/archived 不知道意味着什么 */
+const STATUS_OPTIONS: SelectOption[] = [
+  { value: 'draft', label: 'draft（不出现在公开页面）' },
+  { value: 'live', label: 'live（公开可见）' },
+  { value: 'archived', label: 'archived（已归档）' },
+]
 
 const router = useRouter()
 const event = ref<EventAdmin | null>(null)
@@ -169,14 +177,7 @@ onMounted(load)
             <input v-model="form.title" required />
           </label>
 
-          <label class="field">
-            <span class="field__label">状态</span>
-            <select v-model="form.status">
-              <option value="draft">draft（不出现在公开页面）</option>
-              <option value="live">live（公开可见）</option>
-              <option value="archived">archived（已归档）</option>
-            </select>
-          </label>
+          <Select v-model="form.status" label="状态" :options="STATUS_OPTIONS" />
         </div>
 
         <label class="field">

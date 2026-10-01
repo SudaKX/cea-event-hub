@@ -8,7 +8,21 @@
 import { onMounted, ref } from 'vue'
 
 import { ApiError, http } from '@/api/client'
+import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import type { ResetToken, UserAdmin } from '@/types/api'
+
+/** 静态筛选项。空串表示"不限"，与后端"缺省不过滤"对齐 */
+const ROLE_OPTIONS: SelectOption[] = [
+  { value: '', label: '全部' },
+  { value: 'user', label: 'user' },
+  { value: 'admin', label: 'admin' },
+]
+
+const ACTIVE_OPTIONS: SelectOption[] = [
+  { value: '', label: '全部' },
+  { value: 'true', label: '启用' },
+  { value: 'false', label: '停用' },
+]
 
 const users = ref<UserAdmin[]>([])
 const total = ref(0)
@@ -108,22 +122,18 @@ onMounted(load)
         <span class="field__label">用户名</span>
         <input v-model="username" @keyup.enter="load" />
       </label>
-      <label class="field">
-        <span class="field__label">角色</span>
-        <select v-model="role" @change="load">
-          <option value="">全部</option>
-          <option value="user">user</option>
-          <option value="admin">admin</option>
-        </select>
-      </label>
-      <label class="field">
-        <span class="field__label">状态</span>
-        <select v-model="isActive" @change="load">
-          <option value="">全部</option>
-          <option value="true">启用</option>
-          <option value="false">停用</option>
-        </select>
-      </label>
+      <Select
+        v-model="role"
+        label="角色"
+        :options="ROLE_OPTIONS"
+        @update:model-value="load"
+      />
+      <Select
+        v-model="isActive"
+        label="状态"
+        :options="ACTIVE_OPTIONS"
+        @update:model-value="load"
+      />
       <button class="btn btn--ghost btn--small" @click="load">刷新</button>
     </div>
 

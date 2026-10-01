@@ -4,6 +4,9 @@
  * 保留前缀之外的顶层路径一律被解释为**活动标识** —— 这是需求里"对于别的路径，
  * SPA 路由导航到活动界面"的落点。通配因此必须排在最后，且必须显式排除保留
  * 前缀，否则 `/login` 会被当成一个叫 "login" 的活动。
+ *
+ * 视图按用途分目录：`admin/`（管理台）、`auth/`（登录注册等）、`event/`（活动页
+ * 宿主）。不属于任何一组的单页（404）放在 `views/` 根下。
  */
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
@@ -45,25 +48,25 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'login',
-    component: () => import('@/views/LoginView.vue'),
+    component: () => import('@/views/auth/LoginView.vue'),
     meta: { public: true },
   },
   {
     path: '/register',
     name: 'register',
-    component: () => import('@/views/RegisterView.vue'),
+    component: () => import('@/views/auth/RegisterView.vue'),
     meta: { public: true },
   },
   {
     path: '/reset',
     name: 'reset',
-    component: () => import('@/views/ResetView.vue'),
+    component: () => import('@/views/auth/ResetView.vue'),
     meta: { public: true },
   },
   {
     path: '/verify-email',
     name: 'verify-email',
-    component: () => import('@/views/VerifyEmailView.vue'),
+    component: () => import('@/views/auth/VerifyEmailView.vue'),
     meta: { public: true },
   },
   {

@@ -17,7 +17,17 @@ import {
   listEventSubmissions,
   reviewSubmission,
 } from '@/api/submissions'
+import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import type { EventAdmin, Submission } from '@/types/api'
+
+/** 提交状态是固定的四档，与后端枚举一致 */
+const STATUS_OPTIONS: SelectOption[] = [
+  { value: '', label: '全部' },
+  { value: 'received', label: 'received' },
+  { value: 'reviewing', label: 'reviewing' },
+  { value: 'accepted', label: 'accepted' },
+  { value: 'rejected', label: 'rejected' },
+]
 
 const events = ref<EventAdmin[]>([])
 const eventId = ref('')
@@ -32,7 +42,18 @@ const selected = ref<Set<number>>(new Set())
 const error = ref('')
 const loading = ref(false)
 
-const kinds = computed(() => [...new Set(submissions.value.map((s) => s.kind))].sort())
+/** 活动下拉：标识 + 标题，两者都要，光看标识认不出是哪个活动 */
+const eventOptions = computed<SelectOption[]>(() =>
+  events.value.map((item) => ({ value: item.id, label: `${item.id} — ${item.title}` })),
+)
+
+/** 分类标签是自由字段，筛选项由**实际出现过的值**推导，不预设清单 */
+const kindOptions = computed<SelectOption[]>(() =>
+  [...new Set(submissions.value.map((s) => s.kind))]
+    .sort()
+    .map((value) => ({ value, label: value })),
+)
+
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
 async function loadEvents(): Promise<void> {
@@ -160,33 +181,15 @@ onMounted(async () => {
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
 
     <div class="panel filters">
-      <label class="field">
-        <span class="field__label">活动</span>
-        <select v-model="eventId">
-          <option v-for="item in events" :key="item.id" :value="item.id">
-            {{ item.id }} — {{ item.title }}
-          </option>
-        </select>
-      </label>
+      <Select v-model="eventId" label="活动" :options="eventOptions" />
 
-      <label class="field">
-        <span class="field__label">分类</span>
-        <select v-model="kind">
-          <option value="">全部</option>
-          <option v-for="value in kinds" :key="value" :value="value">{{ value }}</option>
-        </select>
-      </label>
+      <Select
+        v-model="kind"
+        label="分类"
+        :options="[{ value: '', label: '全部' }, ...kindOptions]"
+      />
 
-      <label class="field">
-        <span class="field__label">状态</span>
-        <select v-model="status">
-          <option value="">全部</option>
-          <option value="received">received</option>
-          <option value="reviewing">reviewing</option>
-          <option value="accepted">accepted</option>
-          <option value="rejected">rejected</option>
-        </select>
-      </label>
+      <Select v-model="status" label="状态" :options="STATUS_OPTIONS" />
     </div>
 
     <div class="panel">

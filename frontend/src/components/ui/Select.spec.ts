@@ -1,0 +1,446 @@
+/**
+ * 自定义下拉的交互契约。
+ *
+ * 这个组件存在的唯一理由是"展开列表要能上色"，而它为此接手了原生 `<select>`
+ * 白送的全部职责。所以测试重点不在渲染，而在**那些被接手的职责**：键盘导航、
+ * ARIA 接线、点外部关闭、跳过禁用项。少一样就是一次可访问性回归。
+ */
+import { mount } from '@vue/test-utils'
+import { describe, expect, it, vi } from 'vitest'
+
+import Select, { type SelectOption } from './Select.vue'
+
+const OPTIONS: SelectOption[] = [
+  { value: '', label: '全部' },
+  { value: 'received', label: 'received' },
+  { value: 'reviewing', label: 'reviewing' },
+  { value: 'accepted', label: 'accepted' },
+]
+
+function make(props: Record<string, unknown> = {}) {
+  return mount(Select, {
+    props: { modelValue: '', options: OPTIONS, label: '状态', ...props },
+    attachTo: document.body,
+  })
+}
+
+/** 打开菜单并等 openMenu 内部的 nextTick 落地 */
+async function openMenu(wrapper: ReturnType<typeof make>) {
+  await wrapper.find('.select__trigger').trigger('click')
+  await wrapper.vm.$nextTick()
+  await wrapper.vm.$nextTick()
+}
+
+describe('渲染', () => {
+  it('未选中时显示占位文案', () => {
+    const wrapper = make({ modelValue: '', options: [{ value: '', label: '全部' }] })
+    // 选中项的 label 是"全部"，所以这里显式给一个不匹配的值来走占位分支
+    const other = make({ modelValue: 'nope' })
+    expect(other.find('.select__value').text()).toBe('请选择')
+    expect(other.find('.select__value--empty').exists()).toBe(true)
+    wrapper.unmount()
+    other.unmount()
+  })
+
+  it('显示选中项的标签而不是值', () => {
+    const wrapper = make({ modelValue: 'accepted' })
+    expect(wrapper.find('.select__value').text()).toBe('accepted')
+    expect(wrapper.find('.select__value--empty').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('带 label 时渲染出 field 结构', () => {
+    const wrapper = make()
+    // 刻意是 div.field 而不是 label.field —— 后者会把点击转发给内部按钮，
+    // 点选项时等于把按钮又点了一次（见"点选项即选中并关闭"）
+    expect(wrapper.find('div.field').exists()).toBe(true)
+    expect(wrapper.find('label.field').exists()).toBe(false)
+    expect(wrapper.find('.field__label').text()).toBe('状态')
+    wrapper.unmount()
+  })
+
+  it('不带 label 时不渲染 field 结构', () => {
+    const wrapper = make({ label: undefined, ariaLabel: '状态' })
+    expect(wrapper.find('label.field').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+describe('ARIA 接线', () => {
+  it('触发器是 combobox，并正确反映展开状态', async () => {
+    const wrapper = make({ modelValue: 'accepted' })
+    const trigger = wrapper.find('.select__trigger')
+
+    expect(trigger.attributes('role')).toBe('combobox')
+    expect(trigger.attributes('aria-haspopup')).toBe('listbox')
+    expect(trigger.attributes('aria-expanded')).toBe('false')
+
+    await openMenu(wrapper)
+    expect(wrapper.find('.select__trigger').attributes('aria-expanded')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('选项有 option 角色且标出选中项', async () => {
+    const wrapper = make({ modelValue: 'accepted' })
+    await openMenu(wrapper)
+
+    const options = wrapper.findAll('[role="option"]')
+    expect(options).toHaveLength(OPTIONS.length)
+    expect(options[3]!.attributes('aria-selected')).toBe('true')
+    expect(options[1]!.attributes('aria-selected')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('用 aria-activedescendant 指向当前项，焦点本身留在按钮上', async () => {
+    // select-only combobox 的标准做法：不把焦点移进列表
+    const wrapper = make({ modelValue: 'accepted' })
+    await openMenu(wrapper)
+
+    const trigger = wrapper.find('.select__trigger')
+    const active = trigger.attributes('aria-activedescendant')
+    expect(active).toBeTruthy()
+    expect(wrapper.find(`#${active}`).text()).toBe('accepted')
+    wrapper.unmount()
+  })
+
+  it('用可见标签作为无障碍名称', () => {
+    const wrapper = make()
+    const trigger = wrapper.find('.select__trigger')
+    expect(trigger.attributes('aria-labelledby')).toBeTruthy()
+    expect(wrapper.find(`#${trigger.attributes('aria-labelledby')}`).text()).toBe('状态')
+    wrapper.unmount()
+  })
+
+  it('没有可见标签时退回 ariaLabel', () => {
+    const wrapper = make({ label: undefined, ariaLabel: '筛选项' })
+    expect(wrapper.find('.select__trigger').attributes('aria-label')).toBe('筛选项')
+    wrapper.unmount()
+  })
+})
+
+describe('鼠标', () => {
+  it('点选项即选中并关闭', async () => {
+    const wrapper = make()
+    await openMenu(wrapper)
+
+    await wrapper.findAll('[role="option"]')[2]!.trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toEqual([['reviewing']])
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('重复选中同一项不重复派发', async () => {
+    const wrapper = make({ modelValue: 'reviewing' })
+    await openMenu(wrapper)
+
+    await wrapper.findAll('[role="option"]')[2]!.trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    // 但仍然关闭
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('点外部关闭', async () => {
+    const wrapper = make()
+    await openMenu(wrapper)
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('在组件内部按下不关闭', async () => {
+    const wrapper = make()
+    await openMenu(wrapper)
+
+    await wrapper.find('.select__trigger').trigger('mousedown')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('键盘', () => {
+  it('↓ 打开并落到当前选中项', async () => {
+    const wrapper = make({ modelValue: 'reviewing' })
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'ArrowDown' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+    const active = wrapper.find('.select__trigger').attributes('aria-activedescendant')
+    expect(wrapper.find(`#${active}`).text()).toBe('reviewing')
+    wrapper.unmount()
+  })
+
+  it('关闭状态下 ↑ 打开并落到最后一项', async () => {
+    // 用一个不匹配任何选项的值，才能走到"未选中 -> 落到末尾"这条分支；
+    // 有选中值时 ↑ 与原生一致，打开就停在选中项上
+    const wrapper = make({ modelValue: 'no-such-value' })
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'ArrowUp' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    const active = wrapper.find('.select__trigger').attributes('aria-activedescendant')
+    expect(wrapper.find(`#${active}`).text()).toBe('accepted')
+    wrapper.unmount()
+  })
+
+  it('有选中值时 ↑ 停在选中项而不是末尾', async () => {
+    const wrapper = make({ modelValue: 'reviewing' })
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'ArrowUp' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    const active = wrapper.find('.select__trigger').attributes('aria-activedescendant')
+    expect(wrapper.find(`#${active}`).text()).toBe('reviewing')
+    wrapper.unmount()
+  })
+
+  it('↓/↑ 移动并在两端环绕', async () => {
+    const wrapper = make({ modelValue: 'accepted' })
+    await openMenu(wrapper)
+
+    const activeText = () => {
+      const id = wrapper.find('.select__trigger').attributes('aria-activedescendant')
+      return wrapper.find(`#${id}`).text()
+    }
+
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'ArrowDown' })
+    await wrapper.vm.$nextTick()
+    expect(activeText()).toBe('全部') // 从末项绕回首项
+
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'ArrowUp' })
+    await wrapper.vm.$nextTick()
+    expect(activeText()).toBe('accepted') // 再绕回末项
+    wrapper.unmount()
+  })
+
+  it('Home / End 跳到首尾', async () => {
+    const wrapper = make({ modelValue: 'reviewing' })
+    await openMenu(wrapper)
+
+    const activeText = () => {
+      const id = wrapper.find('.select__trigger').attributes('aria-activedescendant')
+      return wrapper.find(`#${id}`).text()
+    }
+
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'End' })
+    await wrapper.vm.$nextTick()
+    expect(activeText()).toBe('accepted')
+
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'Home' })
+    await wrapper.vm.$nextTick()
+    expect(activeText()).toBe('全部')
+    wrapper.unmount()
+  })
+
+  it('Enter 选中当前项', async () => {
+    const wrapper = make()
+    await openMenu(wrapper)
+
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'ArrowDown' })
+    await wrapper.vm.$nextTick()
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'Enter' })
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([['received']])
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('Space 也能选中', async () => {
+    const wrapper = make()
+    await openMenu(wrapper)
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'ArrowDown' })
+    await wrapper.vm.$nextTick()
+    await wrapper.find('.select__trigger').trigger('keydown', { key: ' ' })
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([['received']])
+    wrapper.unmount()
+  })
+
+  it('Esc 关闭但不改变选择', async () => {
+    const wrapper = make({ modelValue: 'reviewing' })
+    await openMenu(wrapper)
+
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'ArrowDown' })
+    await wrapper.vm.$nextTick()
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'Escape' })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('Tab 关闭且不抢回焦点', async () => {
+    const wrapper = make()
+    await openMenu(wrapper)
+
+    const trigger = wrapper.find('.select__trigger')
+    await trigger.trigger('keydown', { key: 'Tab' })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    // Tab 是"我要走了"，此时把焦点抢回按钮会打断键盘用户
+    expect(document.activeElement).not.toBe(trigger.element)
+    wrapper.unmount()
+  })
+
+  it('首字母跳转从列表开头找第一项', async () => {
+    // 打开后活动项停在"全部"(index 0)；打 'a' 应当落到第一项以 a 开头的
+    // （"accepted"），而不是"当前项之后的第一个匹配"
+    const wrapper = make()
+    await openMenu(wrapper)
+
+    await wrapper.find('.select__trigger').trigger('keydown', { key: 'a' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    const active = wrapper.find('.select__trigger').attributes('aria-activedescendant')
+    expect(wrapper.find(`#${active}`).text()).toBe('accepted')
+    wrapper.unmount()
+  })
+
+  it('连打字母按前缀收窄', async () => {
+    const wrapper = make({
+      options: [
+        { value: 'a', label: 'apple' },
+        { value: 'b', label: 'apricot' },
+        { value: 'c', label: 'banana' },
+      ],
+    })
+    await openMenu(wrapper)
+
+    const trigger = wrapper.find('.select__trigger')
+    const activeText = () => {
+      const id = trigger.attributes('aria-activedescendant')
+      return wrapper.find(`#${id}`).text()
+    }
+
+    await trigger.trigger('keydown', { key: 'a' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(activeText()).toBe('apple')
+
+    // 'pr' 把两个 a 开头的都排除
+    await trigger.trigger('keydown', { key: 'p' })
+    await wrapper.vm.$nextTick()
+    await trigger.trigger('keydown', { key: 'r' })
+    await wrapper.vm.$nextTick()
+    expect(activeText()).toBe('apricot')
+    wrapper.unmount()
+  })
+
+  it('连按同一个字母在同首字母的项之间轮换', async () => {
+    const wrapper = make({
+      options: [
+        { value: 'a', label: 'apple' },
+        { value: 'b', label: 'apricot' },
+        { value: 'c', label: 'banana' },
+      ],
+    })
+    await openMenu(wrapper)
+
+    const trigger = wrapper.find('.select__trigger')
+    const activeText = () => {
+      const id = trigger.attributes('aria-activedescendant')
+      return wrapper.find(`#${id}`).text()
+    }
+
+    await trigger.trigger('keydown', { key: 'a' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(activeText()).toBe('apple')
+
+    // 再按一次 'a' 不该变成找 "aa"，而是在 apple/apricot 之间轮换
+    await trigger.trigger('keydown', { key: 'a' })
+    await wrapper.vm.$nextTick()
+    expect(activeText()).toBe('apricot')
+
+    await trigger.trigger('keydown', { key: 'a' })
+    await wrapper.vm.$nextTick()
+    expect(activeText()).toBe('apple')
+    wrapper.unmount()
+  })
+
+  it('组合键不触发首字母跳转', async () => {
+    const wrapper = make()
+    await openMenu(wrapper)
+
+    await wrapper
+      .find('.select__trigger')
+      .trigger('keydown', { key: 'a', ctrlKey: true })
+    await wrapper.vm.$nextTick()
+
+    // 停在打开时的位置（"全部"），没有跳走
+    const active = wrapper.find('.select__trigger').attributes('aria-activedescendant')
+    expect(wrapper.find(`#${active}`).text()).toBe('全部')
+    wrapper.unmount()
+  })
+})
+
+describe('禁用项', () => {
+  const withDisabled: SelectOption[] = [
+    { value: 'a', label: 'a' },
+    { value: 'b', label: 'b', disabled: true },
+    { value: 'c', label: 'c' },
+  ]
+
+  it('键盘跳过禁用项', async () => {
+    const wrapper = make({ options: withDisabled })
+    await openMenu(wrapper)
+
+    const trigger = wrapper.find('.select__trigger')
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    await wrapper.vm.$nextTick()
+
+    const id = trigger.attributes('aria-activedescendant')
+    expect(wrapper.find(`#${id}`).text()).toBe('c') // 跳过 b
+    wrapper.unmount()
+  })
+
+  it('点击禁用项没有反应', async () => {
+    const wrapper = make({ options: withDisabled })
+    await openMenu(wrapper)
+
+    await wrapper.findAll('[role="option"]')[1]!.trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    // 菜单保持打开：点了没用的东西，不该顺手把菜单也关掉
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('标出 aria-disabled', async () => {
+    const wrapper = make({ options: withDisabled })
+    await openMenu(wrapper)
+    expect(
+      wrapper.findAll('[role="option"]')[1]!.attributes('aria-disabled'),
+    ).toBe('true')
+    wrapper.unmount()
+  })
+})
+
+describe('整体禁用', () => {
+  it('触发器禁用且点不开', async () => {
+    const wrapper = make({ disabled: true })
+    const trigger = wrapper.find('.select__trigger')
+
+    expect(trigger.attributes('disabled')).toBeDefined()
+    await trigger.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+describe('卸载', () => {
+  it('移除文档级监听，避免残留', async () => {
+    const remove = vi.spyOn(document, 'removeEventListener')
+    const wrapper = make()
+    wrapper.unmount()
+    expect(remove).toHaveBeenCalledWith('mousedown', expect.any(Function))
+    remove.mockRestore()
+  })
+})
