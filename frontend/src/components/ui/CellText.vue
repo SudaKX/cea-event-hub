@@ -18,13 +18,20 @@ defineProps<{ text: string }>()
 
 <style scoped>
 .cell {
-  /* 这三条就是截断本身。display:block 让省略号在块级宽度下生效 */
+  /* 这三条就是截断本身 */
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /*
+    `min-width: 0` 是给"作为 flex 子项"准备的：flex 子项默认 min-width:auto，
+    没有它就不会收缩到内容宽度以下，省略号永远不出现。放在这里而不是让每个调用方
+    自己写 —— 忘了写就静默失效，而失效的样子（文本溢出而不是截断）很容易被忽略。
+
+    字号与颜色一律继承：各列的字号本来就不一样，组件不该替它们决定。
+    字体族统一等宽 —— 这些格子里装的都是标识、JSON 这类机器值。
+  */
+  min-width: 0;
   font-family: var(--mono);
-  font-size: 12.5px;
-  color: var(--bone);
 }
 </style>

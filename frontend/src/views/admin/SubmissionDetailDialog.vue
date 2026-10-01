@@ -60,8 +60,19 @@ function onBackdropClick(event: MouseEvent): void {
 
 <template>
   <!-- `@close` 覆盖 Esc 与 close() 两条路径，统一往上抛 -->
-  <dialog ref="dialog" class="detail" aria-labelledby="detail-title" @close="emit('close')" @click="onBackdropClick">
-    <template v-if="submission">
+  <dialog
+    ref="dialog"
+    class="detail"
+    aria-labelledby="detail-title"
+    @close="emit('close')"
+    @click="onBackdropClick"
+  >
+    <!--
+      布局放在这层内层容器上，而不是 `<dialog>` 本身：在 dialog 上写 `display`
+      会盖掉浏览器默认的 `dialog:not([open]) { display: none }`，让关闭状态的
+      对话框依然占位显示。
+    -->
+    <div v-if="submission" class="detail__body">
       <header class="detail__head">
         <h2 id="detail-title" class="detail__title">提交 #{{ submission.id }}</h2>
         <button class="btn btn--ghost btn--small" type="button" @click="emit('close')">
@@ -115,23 +126,32 @@ function onBackdropClick(event: MouseEvent): void {
           </li>
         </ul>
       </section>
-    </template>
+    </div>
   </dialog>
 </template>
 
 <style scoped>
+/*
+  **这个规则块里绝不能出现 `display`。**
+  作者样式里的 `display` 会盖掉浏览器默认的 `dialog:not([open]) { display: none }`
+  —— 于是关闭状态的对话框依然会被渲染，页面上凭空多出一块空卡片。
+  布局交给内层的 .detail__body，这里只管外观与尺寸。
+*/
 .detail {
   width: min(720px, 92vw);
   max-height: 86vh;
   padding: 20px 22px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
   overflow: auto;
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-surface);
   color: var(--bone);
+}
+
+.detail__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .detail::backdrop {

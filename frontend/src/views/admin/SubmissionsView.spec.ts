@@ -124,8 +124,7 @@ describe('点行看详情', () => {
     wrapper.unmount()
   })
 
-  it('点编号按钮打开详情', async () => {
-    const wrapper = await mountView()
+  it('点编号按钮打开详情', async () => {    const wrapper = await mountView()
 
     await wrapper.find('.row-link').trigger('click')
 
@@ -133,8 +132,7 @@ describe('点行看详情', () => {
     wrapper.unmount()
   })
 
-  it('摘要用 $display，详情里仍有完整 JSON', async () => {
-    listAdminEvents.mockResolvedValue([EVENT])
+  it('摘要用 $display，详情里仍有完整 JSON', async () => {    listAdminEvents.mockResolvedValue([EVENT])
     listEventSubmissions.mockResolvedValue({
       submissions: [
         {
@@ -159,10 +157,72 @@ describe('点行看详情', () => {
     await vi.waitFor(() => expect(listEventSubmissions).toHaveBeenCalled())
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.find('.cell').text()).toBe('张三 · 2 年级')
+    expect(wrapper.find('.payload-cell .cell').text()).toBe('张三 · 2 年级')
 
     await wrapper.find('tbody tr').trigger('click')
     expect(wrapper.find('.detail__json').text()).toContain('secret')
+    wrapper.unmount()
+  })
+})
+
+describe('提交者那一列的截断', () => {
+  it('标识走截断组件，而不是直接插值', async () => {
+    // 匿名标识是 `a:<uuid>`，38 个字符，远超列宽。直接插值只会被硬裁，没有省略号
+    const wrapper = await mountView()
+
+    const cell = wrapper.find('td.submitter')
+    expect(cell.find('.cell').text()).toBe('a:browser-1')
+    wrapper.unmount()
+  })
+
+  it('标签在截断元素之外，不会被一起裁掉', async () => {
+    // "匿名"才是这一列真正要看的信息，跟着标识一起被截就本末倒置了
+    const wrapper = await mountView()
+
+    const cell = wrapper.find('td.submitter')
+    expect(cell.find('.cell .tag').exists()).toBe(false)
+    expect(cell.find('.tag').text()).toBe('匿名')
+    wrapper.unmount()
+  })
+
+  it('超长标识也不会撑破单元格', async () => {
+    // 断言的是结构：文本进了截断组件，剩下的交给 CSS
+    listAdminEvents.mockResolvedValue([EVENT])
+    listEventSubmissions.mockResolvedValue({
+      submissions: [
+        {
+          ...submission(1),
+          submitter: 'a:550e8400-e29b-41d4-a716-446655440000',
+        },
+      ],
+      total: 1,
+    })
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div />' } }],
+    })
+    await router.push('/admin/submissions')
+    await router.isReady()
+
+    const wrapper = mount(SubmissionsView, {
+      global: { plugins: [router, createPinia()] },
+      attachTo: document.body,
+    })
+    await vi.waitFor(() => expect(listEventSubmissions).toHaveBeenCalled())
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('td.submitter .cell').text()).toBe(
+      'a:550e8400-e29b-41d4-a716-446655440000',
+    )
+    wrapper.unmount()
+  })
+
+  it('分类列同样截断', async () => {
+    // 分类允许 64 个字符，和标识是同一类问题
+    const wrapper = await mountView()
+
+    expect(wrapper.find('td.kind-cell .cell').text()).toBe('signup')
     wrapper.unmount()
   })
 })

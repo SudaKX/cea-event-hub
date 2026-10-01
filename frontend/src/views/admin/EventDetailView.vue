@@ -351,12 +351,18 @@ watch(
                   {{ item.id }}
                 </button>
               </td>
-              <td class="num">
-                {{ item.submitter }}
+              <td class="num submitter">
+                <!--
+                  匿名标识是 `a:<uuid>`，38 个字符，远超这一列宽度，必须截断。
+                  标签不能跟着被截 —— 它才是这一列真正要看的信息。
+                -->
+                <CellText class="submitter__id" :text="item.submitter" />
                 <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
               </td>
-              <td class="num">{{ item.kind }}</td>
-              <td>
+              <td class="num kind-cell">
+                <CellText :text="item.kind" />
+              </td>
+              <td class="payload-cell">
                 <!-- 按原始键值展示，不假设字段语义；$display 只影响摘要那一行 -->
                 <CellText :text="payloadSummary(item.payload)" />
               </td>
@@ -521,6 +527,22 @@ watch(
 /* 整行可点：给鼠标用户一个更大的目标，也给"这行有详情"一个视觉暗示 */
 .row--clickable {
   cursor: pointer;
+}
+
+/*
+  提交者那一格：标识占满剩余宽度并被截断，标签保持完整。
+  `.submitter__id` 落在子组件根元素上 —— Vue 会把父组件的 scope 属性也加到子组件
+  根节点，所以这条规则能生效。
+*/
+.submitter {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.submitter__id {
+  flex: 1;
+  min-width: 0;
 }
 
 .row--clickable:hover {
