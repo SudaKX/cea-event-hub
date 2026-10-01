@@ -49,6 +49,7 @@ operations:
     guidance:
       - 按 tasks 组内顺序推进；每完成一条即勾选，不要批量事后勾选
       - 若实现中发现某条任务与 design 冲突，先修订 design 再改实现，不要在代码里绕过
+      - 执行 git commit 前先向用户提问并等待回应 —— 提交要签名，而 GPG 口令提示需要用户本人在场，人不在时提示会超时、提交失败。详见仓库根的 AGENTS.md
   archive:
     guidance:
       - 归档前确认 tasks 全部完成，并汇总本期明确未做的部分
