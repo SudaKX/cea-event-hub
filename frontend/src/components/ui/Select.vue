@@ -24,16 +24,20 @@
  *
  * ## 两种模式：为什么搜索框就是触发器本身
  *
- * `searchable` 打开时，触发器从按钮换成文本输入框，输入即过滤（子串匹配，
- * 不区分大小写）。
+ * `searchable` 打开时**可以**搜索：输入即过滤（子串匹配，不区分大小写）。
  *
- * 另一种常见做法是"按钮触发器 + 面板里放一个搜索框"。这里**不采用**，因为那会
- * 逼出两个都想当 combobox 的元素：面板里的输入框持有焦点，而 `aria-expanded` /
+ * 搜索框就是触发器本身，而不是在面板里另放一个输入框。后者会逼出两个都想当
+ * combobox 的元素：面板里的输入框持有焦点，而 `aria-expanded` /
  * `aria-activedescendant` 却挂在按钮上 —— 读屏此时根本不会播报当前活动项。
- * 把输入框本身做成 combobox，一个控件一个角色，这条线才说得通。
+ * 一个控件一个 combobox 角色，这条线才说得通。
  *
- * 搜索模式下**打开即清空输入并列出全部**：不打字就是浏览，打字就是搜索。关闭时
- * 输入框恢复显示当前选中项的标签。
+ * ## 控件形态跟着"是否可编辑"走
+ *
+ * **关闭时永远是按钮，打开且可搜索时才换成输入框。** 这一点是踩过坑才定下来的：
+ * 只要搜索模式下控件"始终"是输入框，它一聚焦就显示文本光标，选完之后看起来像
+ * 还在编辑 —— 无论鼠标选还是键盘选。把"可编辑"与"已选中"交给两个元素表达，
+ * 这个矛盾才根本消失，而且鼠标与键盘可以走同一条焦点路径（都交回按钮），
+ * 键盘用户选完接着 Tab 也不会丢位置。
  *
  * ## 与原生控件的差距（已知且接受）
  *
@@ -104,13 +108,13 @@ const selectedLabel = computed(
   () => props.options.find((option) => option.value === props.modelValue)?.label ?? '',
 )
 
-/** 输入框显示什么：搜索中显示关键词，否则显示当前选中项 */
-const inputText = computed(() => (open.value ? query.value : selectedLabel.value))
-
-/** 打开且没有关键词时，把当前选中项作为灰字提示，避免忘了自己选了什么 */
-const inputPlaceholder = computed(() =>
-  open.value ? selectedLabel.value || props.placeholder : props.placeholder,
-)
+/**
+ * 输入框里的灰字提示。
+ *
+ * 输入框**只在打开时存在**，所以这里直接把当前选中项当提示 —— 搜索时关键词一
+ * 清空，至少还看得见自己选的是什么。
+ */
+const searchPlaceholder = computed(() => selectedLabel.value || props.placeholder)
 
 const activeDescendant = computed(() =>
   open.value && activeIndex.value >= 0 ? optionId(activeIndex.value) : undefined,
@@ -130,18 +134,27 @@ function firstEnabled(delta = 1): number {
   return -1
 }
 
-async function openMenu(preferLast = false): Promise<void> {
+/**
+ * 打开面板。
+ *
+ * `seed` 用于"关闭状态下直接打字"：那一下按键要带进搜索词，否则用户得先按
+ * Enter 打开、再重新打一遍。
+ */
+async function openMenu(preferLast = false, seed = ''): Promise<void> {
   if (props.disabled || open.value) return
   open.value = true
-  query.value = ''
+  query.value = seed
 
   activeIndex.value =
-    selectedIndex.value >= 0 ? selectedIndex.value : firstEnabled(preferLast ? -1 : 1)
+    selectedIndex.value >= 0 && !seed
+      ? selectedIndex.value
+      : firstEnabled(preferLast ? -1 : 1)
 
   await nextTick()
   measureDirection()
   scrollActiveIntoView()
-  // 显式把焦点放到控件上：从尖角打开时它本来没有焦点，不给的话键盘导航会失灵
+  // 显式把焦点放到控件上：从尖角打开时它本来没有焦点，不给的话键盘导航会失灵。
+  // 打开后控件已经是输入框（搜索模式），这里等 nextTick 就是为了拿到它。
   if (props.searchable) search.value?.focus()
   else trigger.value?.focus()
 }
@@ -150,9 +163,12 @@ function closeMenu(restoreFocus = true): void {
   if (!open.value) return
   open.value = false
   dropUp.value = false
-  // 关掉就把关键词丢掉，输入框恢复显示选中项 —— 否则下次打开会带着上次的搜索词
+  // 关掉就把关键词丢掉 —— 否则下次打开会带着上次的搜索词，看到一个残缺的列表
   query.value = ''
-  if (restoreFocus && !props.searchable) trigger.value?.focus()
+
+  // 焦点必须**等重新渲染之后**再放：搜索模式下这一步会把输入框换成按钮，
+  // 立刻 focus 会 focus 到那个马上要被卸载的输入框上。
+  if (restoreFocus) void nextTick(() => trigger.value?.focus())
 }
 
 /**
@@ -162,7 +178,8 @@ function closeMenu(restoreFocus = true): void {
  * 触发器贴着视口底部时，向上翻也救不了多少。
  */
 function measureDirection(): void {
-  const control = props.searchable ? search.value : trigger.value
+  // 打开时可搜索模式是输入框、否则是按钮，取存在的那个
+  const control = search.value ?? trigger.value
   const listEl = list.value
   if (!control || !listEl) return
 
@@ -203,23 +220,16 @@ function move(delta: number): void {
 /**
  * 选中一项。
  *
- * `fromMouse` 决定**焦点交给谁** —— 这是两种输入方式真正不同的地方：
+ * **鼠标与键盘走同一条路径**，因为焦点交给的是"关闭后的那个按钮"，而按钮不显示
+ * 文本光标 —— 既不会看起来像还在编辑，键盘用户选完接着 Tab 也不会丢位置。
  *
- * - **鼠标选完，把焦点交出去。** 输入框保持聚焦时会出现文本光标，看起来像"还
- *   在编辑"，而用户已经选完了。原生 `<select>` 选完也保留焦点，但它不是文本框、
- *   不显示光标，所以没这个观感问题。
- * - **键盘选完，焦点必须留在控件上。** 否则接下来的 `Tab` 会从 `body` 开始，
- *   键盘用户直接迷路。
+ * 早先的版本按"鼠标还是键盘"分叉：鼠标选完失焦、键盘选完保留焦点。那是错的，
+ * 因为真正的区别不是输入设备，而是**控件此刻是否可编辑**。搜索模式下控件一度
+ * 始终是输入框，于是键盘选完必然留着光标 —— 分叉只是在给这个错误设计打补丁。
  */
-function choose(option: SelectOption, fromMouse = false): void {
+function choose(option: SelectOption): void {
   if (option.disabled) return
   if (option.value !== props.modelValue) emit('update:modelValue', option.value)
-
-  if (fromMouse) {
-    closeMenu(false)
-    if (props.searchable) search.value?.blur()
-    return
-  }
   closeMenu(true)
 }
 
@@ -271,10 +281,6 @@ function onSearchInput(event: Event): void {
   activeIndex.value = firstEnabled(1)
 }
 
-function onSearchFocus(): void {
-  void openMenu()
-}
-
 /**
  * 焦点离开整个组件时关闭。
  *
@@ -313,8 +319,8 @@ function onTriggerKeydown(event: KeyboardEvent): void {
       else void openMenu()
       return
     case ' ':
-      // 搜索模式下空格是正常的输入字符，不能当成"确认"
-      if (props.searchable) return
+      // 输入框里空格是普通字符，不能当成"确认"；按钮上空格才是激活
+      if ((event.target as HTMLElement | null)?.tagName === 'INPUT') return
       event.preventDefault()
       if (open.value) commitActive()
       else void openMenu()
@@ -343,16 +349,19 @@ function onTriggerKeydown(event: KeyboardEvent): void {
       // 关闭但**不抢回焦点** —— 用户明确要走了
       closeMenu(false)
       return
-    default:
-      if (
-        !props.searchable &&
-        event.key.length === 1 &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey
-      ) {
-        typeAhead(event.key)
+    default: {
+      const printable =
+        event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey
+      if (!printable) return
+
+      if (props.searchable) {
+        // 关闭时控件是按钮，直接打字说明想搜索：打开并把这一下带进搜索词，
+        // 否则用户得先按 Enter 打开、再重新打一遍
+        if (!open.value) void openMenu(false, event.key)
+        return
       }
+      typeAhead(event.key)
+    }
   }
 }
 
@@ -393,9 +402,18 @@ onBeforeUnmount(() => {
     <span v-if="label" :id="labelId" class="field__label">{{ label }}</span>
 
     <div class="select" :class="{ 'select--open': open, 'select--disabled': disabled }">
-      <!-- 搜索模式：触发器就是输入框本身，一个控件一个 combobox 角色 -->
+      <!--
+        控件的形态取决于**此刻是否可编辑**：
+          - 关闭时永远是按钮，只负责展示当前选中项 —— 按钮不显示文本光标，
+            所以选完之后不会看起来像还在编辑
+          - 打开且可搜索时才换成输入框
+
+        早先的版本在搜索模式下"永远"用输入框，于是只要它还聚焦着就有光标，
+        选完也像没选完。把"可编辑"和"已选中"这两种状态交给两个元素表达，
+        这个矛盾才消失。
+      -->
       <input
-        v-if="searchable"
+        v-if="searchable && open"
         ref="search"
         type="text"
         class="input select__trigger select__search"
@@ -409,10 +427,9 @@ onBeforeUnmount(() => {
         aria-autocomplete="list"
         autocomplete="off"
         :disabled="disabled"
-        :value="inputText"
-        :placeholder="inputPlaceholder"
+        :value="query"
+        :placeholder="searchPlaceholder"
         @input="onSearchInput"
-        @focus="onSearchFocus"
         @keydown="onTriggerKeydown"
       />
 
@@ -469,7 +486,7 @@ onBeforeUnmount(() => {
           role="option"
           :aria-selected="option.value === modelValue"
           :aria-disabled="option.disabled || undefined"
-          @click="choose(option, true)"
+          @click="choose(option)"
           @mouseenter="hover(index, option)"
         >
           {{ option.label }}

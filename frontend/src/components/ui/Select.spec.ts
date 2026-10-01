@@ -25,14 +25,20 @@ function make(props: Record<string, unknown> = {}) {
   })
 }
 
-/** 打开菜单并等 openMenu 内部的 nextTick 落地。两种模式的触发方式不同 */
+/**
+ * 打开菜单并等 openMenu 内部的 nextTick 落地。
+ *
+ * 关闭状态下**两种模式都是按钮**（搜索模式的输入框只在打开时存在），
+ * 所以打开方式统一是"点按钮"。
+ */
 async function openMenu(wrapper: ReturnType<typeof make>) {
-  const search = wrapper.find('input.select__search')
-  if (search.exists()) await search.trigger('focus')
-  else await wrapper.find('button.select__trigger').trigger('click')
+  await wrapper.find('button.select__trigger').trigger('click')
   await wrapper.vm.$nextTick()
   await wrapper.vm.$nextTick()
 }
+
+/** 打开后取搜索框（只在搜索模式下存在） */
+const searchInput = (wrapper: ReturnType<typeof make>) => wrapper.find('input.select__search')
 
 describe('渲染', () => {
   it('未选中时显示占位文案', () => {
@@ -584,47 +590,50 @@ describe('选中后的展示状态', () => {
     { value: 'hackathon', label: 'hackathon — 黑客松' },
   ]
 
-  it('搜索模式下鼠标选中后失焦，不再是编辑状态', async () => {
-    const wrapper = makeHost(OPTIONS, true)
-    const input = wrapper.find('input')
-    const el = input.element as HTMLInputElement
+  /** 打开并用关键词过滤，返回搜索框 */
+  async function openAndSearch(wrapper: ReturnType<typeof makeHost>, keyword: string) {
+    await wrapper.find('button.select__trigger').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
 
-    await input.trigger('focus')
+    const input = wrapper.find('input.select__search')
+    await input.setValue(keyword)
     await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
-    await input.setValue('work')
-    await wrapper.vm.$nextTick()
+    return input
+  }
+
+  it('搜索模式下鼠标选中后控件变回按钮，不再有文本光标', async () => {
+    const wrapper = makeHost(OPTIONS, true)
+    await openAndSearch(wrapper, 'work')
 
     await wrapper.findAll('[role="option"]')[0]!.trigger('click')
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
 
-    // 值要对：显示的是新选中的标签，不是刚才输入的关键词
-    expect(el.value).toBe('workshop — 嵌入式工作坊')
-    // 焦点要交出去：留着就会出现文本光标，看起来像还在编辑
-    expect(document.activeElement).not.toBe(el)
+    // 关键：关闭后不再是输入框，所以不存在"看起来还在编辑"
+    expect(wrapper.find('input.select__search').exists()).toBe(false)
+    expect(wrapper.find('button.select__trigger').exists()).toBe(true)
+    // 显示的是新选中的标签，不是刚才输入的关键词
+    expect(wrapper.find('.select__value').text()).toBe('workshop — 嵌入式工作坊')
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('搜索模式下键盘选中后仍保持聚焦', async () => {
-    // 键盘用户选完多半要继续 Tab，焦点被夺走会让 Tab 从 body 重新开始
+  it('搜索模式下键盘选中后同样变回按钮，且焦点在按钮上', async () => {
+    // 这就是被报的那个问题：回车选完仍然是输入框、仍然有光标。
+    // 焦点必须留下（否则 Tab 从 body 重来），但留下的应当是**按钮**。
     const wrapper = makeHost(OPTIONS, true)
-    const input = wrapper.find('input')
-    const el = input.element as HTMLInputElement
-
-    await input.trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
-    await input.setValue('hack')
-    await wrapper.vm.$nextTick()
+    const input = await openAndSearch(wrapper, 'hack')
 
     await input.trigger('keydown', { key: 'Enter' })
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
 
-    expect(el.value).toBe('hackathon — 黑客松')
-    expect(document.activeElement).toBe(el)
+    expect(wrapper.find('input.select__search').exists()).toBe(false)
+    const button = wrapper.find('button.select__trigger')
+    expect(button.exists()).toBe(true)
+    expect(wrapper.find('.select__value').text()).toBe('hackathon — 黑客松')
+    expect(document.activeElement).toBe(button.element)
     wrapper.unmount()
   })
 
@@ -643,23 +652,49 @@ describe('选中后的展示状态', () => {
     wrapper.unmount()
   })
 
-  it('键盘选完后 Tab 走开不会被抢回焦点', async () => {
+  it('打开时是输入框，关闭后换回按钮', async () => {
+    // 控件形态跟着"是否可编辑"走 —— 这是整个修复的支点
     const wrapper = makeHost(OPTIONS, true)
-    const input = wrapper.find('input')
+    expect(wrapper.find('button.select__trigger').exists()).toBe(true)
+    expect(wrapper.find('input.select__search').exists()).toBe(false)
 
-    await input.trigger('focus')
+    await wrapper.find('button.select__trigger').trigger('click')
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
+    expect(wrapper.find('input.select__search').exists()).toBe(true)
+    expect(wrapper.find('button.select__trigger').exists()).toBe(false)
+
+    await wrapper.find('input.select__search').trigger('keydown', { key: 'Escape' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('input.select__search').exists()).toBe(false)
+    expect(wrapper.find('button.select__trigger').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('键盘选中后焦点落在按钮上，Tab 走开不会被抢回', async () => {
+    const wrapper = makeHost(OPTIONS, true)
+
+    await wrapper.find('button.select__trigger').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    const input = wrapper.find('input.select__search')
     await input.setValue('spring')
     await wrapper.vm.$nextTick()
     await input.trigger('keydown', { key: 'Enter' })
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
 
+    // 选完焦点应当落在**按钮**上：既不显示光标，Tab 也不会从 body 重来
+    expect(document.activeElement).toBe(
+      wrapper.find('button.select__trigger').element,
+    )
+
     const outside = document.createElement('input')
     document.body.appendChild(outside)
     outside.focus()
-    await input.trigger('keydown', { key: 'Tab' })
+    await wrapper.find('button.select__trigger').trigger('keydown', { key: 'Tab' })
     await wrapper.vm.$nextTick()
 
     expect(document.activeElement).toBe(outside)
@@ -706,35 +741,34 @@ const labelsOf = (wrapper: ReturnType<typeof makeSearchable>) =>
   wrapper.findAll('[role="option"]').map((node) => node.text())
 
 describe('搜索模式', () => {
-  it('触发器是输入框而不是按钮，并且是 combobox', () => {
+  it('关闭时是按钮，打开后才是输入框', async () => {
+    // 这是整个设计的关键：控件形态跟着"是否可编辑"走
     const wrapper = makeSearchable()
-    const input = wrapper.find('input.select__search')
+    expect(wrapper.find('button.select__trigger').exists()).toBe(true)
+    expect(wrapper.find('input.select__search').exists()).toBe(false)
 
+    await openMenu(wrapper)
+    const input = searchInput(wrapper)
     expect(input.exists()).toBe(true)
-    expect(wrapper.find('button.select__trigger').exists()).toBe(false)
     expect(input.attributes('role')).toBe('combobox')
     expect(input.attributes('aria-autocomplete')).toBe('list')
     wrapper.unmount()
   })
 
-  it('未打开时输入框显示当前选中项的标签', () => {
+  it('关闭时按钮显示当前选中项的标签', () => {
     const wrapper = makeSearchable({ modelValue: 'workshop' })
-    expect((wrapper.find('input').element as HTMLInputElement).value).toBe(
-      'workshop — 嵌入式工作坊',
-    )
+    expect(wrapper.find('.select__value').text()).toBe('workshop — 嵌入式工作坊')
     wrapper.unmount()
   })
 
-  it('聚焦即打开，并清空关键词列出全部', async () => {
+  it('打开后列出全部，选中项作为灰字提示', async () => {
     const wrapper = makeSearchable({ modelValue: 'workshop' })
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
+    await openMenu(wrapper)
 
     expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
     expect(labelsOf(wrapper)).toHaveLength(EVENTS.length)
-    // 清空了，但选中项作为灰字提示仍然看得到
-    const input = wrapper.find('input').element as HTMLInputElement
+
+    const input = searchInput(wrapper).element as HTMLInputElement
     expect(input.value).toBe('')
     expect(input.placeholder).toBe('workshop — 嵌入式工作坊')
     wrapper.unmount()
@@ -742,11 +776,9 @@ describe('搜索模式', () => {
 
   it('输入即按子串过滤，不区分大小写', async () => {
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
+    await openMenu(wrapper)
 
-    await wrapper.find('input').setValue('WORKSHOP')
+    await searchInput(wrapper).setValue('WORKSHOP')
     await wrapper.vm.$nextTick()
     expect(labelsOf(wrapper)).toEqual(['workshop — 嵌入式工作坊'])
     wrapper.unmount()
@@ -755,11 +787,9 @@ describe('搜索模式', () => {
   it('匹配的是子串而不是前缀', async () => {
     // "招新" 出现在标签中段，前缀匹配找不到
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
+    await openMenu(wrapper)
 
-    await wrapper.find('input').setValue('招新')
+    await searchInput(wrapper).setValue('招新')
     await wrapper.vm.$nextTick()
     expect(labelsOf(wrapper)).toEqual([
       'spring-2026 — 春季招新',
@@ -770,25 +800,21 @@ describe('搜索模式', () => {
 
   it('过滤后活动项落到第一个可用项', async () => {
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
+    await openMenu(wrapper)
+
+    await searchInput(wrapper).setValue('hack')
     await wrapper.vm.$nextTick()
 
-    await wrapper.find('input').setValue('hack')
-    await wrapper.vm.$nextTick()
-
-    const id = wrapper.find('input').attributes('aria-activedescendant')
+    const id = searchInput(wrapper).attributes('aria-activedescendant')
     expect(wrapper.find(`#${id}`).text()).toBe('hackathon — 黑客松')
     wrapper.unmount()
   })
 
   it('搜不到时给一句话而不是空气泡', async () => {
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
+    await openMenu(wrapper)
 
-    await wrapper.find('input').setValue('zzzz')
+    await searchInput(wrapper).setValue('zzzz')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.findAll('[role="option"]')).toHaveLength(0)
@@ -798,109 +824,124 @@ describe('搜索模式', () => {
 
   it('回车选中过滤后的项', async () => {
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
+    await openMenu(wrapper)
 
     // 注意 "autumn" 不含 "auto"（拼写是 a-u-t-u-m-n），这里用真正的中段子串
-    await wrapper.find('input').setValue('umn')
+    await searchInput(wrapper).setValue('umn')
     await wrapper.vm.$nextTick()
     expect(labelsOf(wrapper)).toEqual(['autumn-2026 — 秋季招新'])
 
-    await wrapper.find('input').trigger('keydown', { key: 'Enter' })
+    await searchInput(wrapper).trigger('keydown', { key: 'Enter' })
 
     expect(wrapper.emitted('update:modelValue')).toEqual([['autumn-2026']])
     wrapper.unmount()
   })
 
-  it('选中后输入框恢复显示新标签', async () => {
+  it('选中后关闭并换回按钮', async () => {
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
+    await openMenu(wrapper)
 
-    await wrapper.find('input').setValue('work')
+    await searchInput(wrapper).setValue('work')
     await wrapper.vm.$nextTick()
     await wrapper.findAll('[role="option"]')[0]!.trigger('click')
     await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
-    // props 在测试里不会回写，所以这里仍显示旧的（空）选中项
-    expect((wrapper.find('input').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.find('input.select__search').exists()).toBe(false)
+    expect(wrapper.find('button.select__trigger').exists()).toBe(true)
     wrapper.unmount()
   })
 
   it('关闭后再打开丢掉上次的关键词', async () => {
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
-    await wrapper.find('input').setValue('hack')
+    await openMenu(wrapper)
+    await searchInput(wrapper).setValue('hack')
     await wrapper.vm.$nextTick()
     expect(labelsOf(wrapper)).toHaveLength(1)
 
-    await wrapper.find('input').trigger('keydown', { key: 'Escape' })
+    await searchInput(wrapper).trigger('keydown', { key: 'Escape' })
+    await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
 
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
+    await openMenu(wrapper)
     expect(labelsOf(wrapper)).toHaveLength(EVENTS.length)
+    expect((searchInput(wrapper).element as HTMLInputElement).value).toBe('')
     wrapper.unmount()
   })
 
-  it('空格是输入字符，不是确认', async () => {
+  it('输入框里空格是字符，不是确认', async () => {
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
+    await openMenu(wrapper)
 
-    await wrapper.find('input').trigger('keydown', { key: ' ' })
+    await searchInput(wrapper).trigger('keydown', { key: ' ' })
     // 没有选中、也没有关闭 —— 空格该被当成搜索词的一部分
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
     expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('键盘移动只在过滤结果内环绕', async () => {
+  it('按钮上空格是打开，不是字符', async () => {
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
+    await wrapper.find('button.select__trigger').trigger('keydown', { key: ' ' })
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
 
-    await wrapper.find('input').setValue('20')
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('关闭状态下直接打字会打开并带上那个字符', async () => {
+    // 否则用户得先按 Enter 打开、再重新打一遍
+    const wrapper = makeSearchable()
+    await wrapper.find('button.select__trigger').trigger('keydown', { key: 'h' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    // 这一下按键成了搜索词本身，列表随之收窄
+    // （注意 workshop 里也有 h，所以匹配两项 —— 这正是子串匹配应有的结果）
+    expect((searchInput(wrapper).element as HTMLInputElement).value).toBe('h')
+    expect(labelsOf(wrapper)).toEqual([
+      'workshop — 嵌入式工作坊',
+      'hackathon — 黑客松',
+    ])
+    wrapper.unmount()
+  })
+
+  it('键盘移动只在过滤结果内环绕', async () => {
+    const wrapper = makeSearchable()
+    await openMenu(wrapper)
+
+    await searchInput(wrapper).setValue('20')
     await wrapper.vm.$nextTick()
     expect(labelsOf(wrapper)).toHaveLength(2)
 
     const activeText = () => {
-      const id = wrapper.find('input').attributes('aria-activedescendant')
+      const id = searchInput(wrapper).attributes('aria-activedescendant')
       return wrapper.find(`#${id}`).text()
     }
 
-    await wrapper.find('input').trigger('keydown', { key: 'ArrowDown' })
+    await searchInput(wrapper).trigger('keydown', { key: 'ArrowDown' })
     await wrapper.vm.$nextTick()
     expect(activeText()).toBe('autumn-2026 — 秋季招新')
 
     // 绕回第一项，而不是跑到被过滤掉的项上
-    await wrapper.find('input').trigger('keydown', { key: 'ArrowDown' })
+    await searchInput(wrapper).trigger('keydown', { key: 'ArrowDown' })
     await wrapper.vm.$nextTick()
     expect(activeText()).toBe('spring-2026 — 春季招新')
     wrapper.unmount()
   })
 
-  it('搜索模式不使用首字母跳转（输入本身就是搜索）', async () => {
+  it('按钮上打字走搜索而不是首字母跳转', async () => {
+    // 搜索模式没有"首字母跳转"这回事 —— 那一下按键应当变成搜索词
     const wrapper = makeSearchable()
-    await wrapper.find('input').trigger('focus')
+    await wrapper.find('button.select__trigger').trigger('keydown', { key: 'w' })
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
 
-    await wrapper.find('input').trigger('keydown', { key: 'h' })
-    await wrapper.vm.$nextTick()
-    // 没有过滤、也没有把活动项跳到 h 开头的那项
-    expect(labelsOf(wrapper)).toHaveLength(EVENTS.length)
-    const id = wrapper.find('input').attributes('aria-activedescendant')
-    expect(wrapper.find(`#${id}`).text()).toBe(EVENTS[0]!.label)
+    expect((searchInput(wrapper).element as HTMLInputElement).value).toBe('w')
+    expect(labelsOf(wrapper)).toEqual(['workshop — 嵌入式工作坊'])
     wrapper.unmount()
   })
 
