@@ -15,7 +15,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 const BUNDLE = resolve(process.cwd(), 'public/sdk/v1/cea.js')
 
@@ -113,5 +113,102 @@ describe('SDK 产物', () => {
 
     const cea = (globalThis as unknown as { CEA: { ready: Promise<unknown> } }).CEA
     await expect(cea.ready).resolves.toEqual(identity)
+  })
+
+  it('把宿主的进度回推转交给 onProgress', async () => {
+    // 这一条也是补上来的：宿主一直在回推 hub:upload-progress，但 SDK 从没处理
+    // 过它，只在结束时补了一次 (1, 1) —— 参数看着像进度，实际是假的。
+    const cea = (globalThis as unknown as {
+      CEA: { submit: (options: unknown) => Promise<unknown> }
+    }).CEA
+
+    const sent: Array<{ type?: string; id?: string }> = []
+    const spy = vi
+      .spyOn(globalThis as unknown as { postMessage: (msg: unknown) => void }, 'postMessage')
+      .mockImplementation((msg: unknown) => {
+        sent.push(msg as { type?: string; id?: string })
+      })
+
+    const progress: Array<[number, number | null]> = []
+    const pending = cea.submit({
+      payload: { a: 1 },
+      onProgress: (loaded: number, total: number | null) => progress.push([loaded, total]),
+    })
+
+    // 等 SDK 内部 await ready 之后把 RPC 发出去
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const rpc = sent.find((message) => message.type === 'event:rpc')
+    expect(rpc, '没有发出 RPC').toBeDefined()
+
+    const source = globalThis.window?.parent ?? globalThis
+    const dispatch = (data: unknown) => {
+      const event = new MessageEvent('message', { data })
+      Object.defineProperty(event, 'source', { value: source })
+      globalThis.dispatchEvent(event)
+    }
+
+    dispatch({
+      v: 1,
+      type: 'hub:upload-progress',
+      payload: { requestId: rpc!.id, loaded: 30, total: 100 },
+    })
+    expect(progress).toEqual([[30, 100]])
+
+    dispatch({
+      v: 1,
+      type: 'hub:upload-progress',
+      payload: { requestId: rpc!.id, loaded: 70, total: 100 },
+    })
+    expect(progress).toEqual([
+      [30, 100],
+      [70, 100],
+    ])
+
+    // 收尾，避免留下悬挂的 promise
+    dispatch({ v: 1, type: 'hub:result', id: rpc!.id, payload: { ok: true, data: {} } })
+    await pending
+    spy.mockRestore()
+  })
+
+  it('进度回推的 requestId 不匹配时不影响别的请求', async () => {
+    const cea = (globalThis as unknown as {
+      CEA: { submit: (options: unknown) => Promise<unknown> }
+    }).CEA
+
+    const progress: unknown[] = []
+    const spy = vi
+      .spyOn(globalThis as unknown as { postMessage: (msg: unknown) => void }, 'postMessage')
+      .mockImplementation(() => {})
+
+    const pending = cea.submit({
+      payload: { b: 2 },
+      onProgress: (loaded: number) => progress.push(loaded),
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const source = globalThis.window?.parent ?? globalThis
+    const dispatch = (data: unknown) => {
+      const event = new MessageEvent('message', { data })
+      Object.defineProperty(event, 'source', { value: source })
+      globalThis.dispatchEvent(event)
+    }
+
+    dispatch({
+      v: 1,
+      type: 'hub:upload-progress',
+      payload: { requestId: 'r-does-not-exist', loaded: 99, total: 100 },
+    })
+    expect(progress).toEqual([])
+
+    // 收尾
+    const message = new MessageEvent('message', {
+      data: { v: 1, type: 'hub:result', id: 'r-unknown', payload: { ok: true } },
+    })
+    Object.defineProperty(message, 'source', { value: source })
+    globalThis.dispatchEvent(message)
+    spy.mockRestore()
+
+    // 上面那条 result 的 id 对不上，promise 仍然悬挂 —— 用超时兜底释放
+    await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 20))])
   })
 })

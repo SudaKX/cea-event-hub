@@ -85,6 +85,8 @@ export interface CeaApi {
 interface Pending {
   resolve: (value: unknown) => void
   reject: (error: CeaRequestError) => void
+  /** 上传进度回调。由宿主经 hub:upload-progress 回推，见 handleMessage。 */
+  onProgress?: (loaded: number, total: number | null) => void
 }
 
 const READY_TIMEOUT_MS = 10_000
@@ -167,9 +169,31 @@ class Bridge {
         this.settle(message)
         break
       }
+      case HOST_MESSAGE.UPLOAD_PROGRESS: {
+        this.reportProgress(message)
+        break
+      }
       default:
         break
     }
+  }
+
+  /**
+   * 把宿主的进度回推转交给发起该请求的回调。
+   *
+   * 进度消息不带信封的 `id`（它是请求过程中的推送，不是对某条消息的应答），
+   * 而是把 requestId 放在载荷里 —— 因此这里按载荷里的 requestId 查找。
+   */
+  private reportProgress(message: Envelope): void {
+    const payload = message.payload as
+      | { requestId?: string; loaded?: number; total?: number | null }
+      | undefined
+    if (!payload?.requestId) return
+
+    const pending = this.pending.get(payload.requestId)
+    if (!pending?.onProgress) return
+
+    pending.onProgress(payload.loaded ?? 0, payload.total ?? null)
   }
 
   private settle(message: Envelope): void {
@@ -193,12 +217,16 @@ class Bridge {
     }
   }
 
-  async call(op: string, args: Record<string, unknown> = {}): Promise<unknown> {
+  async call(
+    op: string,
+    args: Record<string, unknown> = {},
+    onProgress?: (loaded: number, total: number | null) => void,
+  ): Promise<unknown> {
     await this.readyPromise
     const id = `r${++this.sequence}`
 
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      this.pending.set(id, { resolve, reject, onProgress })
       this.post(IFRAME_MESSAGE.RPC, { op, args }, id)
     })
   }
@@ -252,9 +280,9 @@ const api: CeaApi = {
     // 这个分叉是内部细节：作者视角永远是一次 submit 调用。
     const op = options.files && options.files.length > 0 ? 'form.submitFiles' : 'form.submit'
 
-    const result = await bridge.call(op, args)
-    options.onProgress?.(1, 1)
-    return result
+    // 进度由宿主回推：请求是宿主发的，所以它天然拿得到 onUploadProgress，
+    // 活动页只需要给一个回调。这正是代理模型白拿的好处之一。
+    return bridge.call(op, args, options.onProgress)
   },
 
   toast(message: string, level: 'info' | 'error' = 'info') {
