@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 自定义下拉选择。
+ * 自定义下拉选择，支持两种模式。
  *
  * ## 为什么要自己写
  *
@@ -13,19 +13,34 @@
  * 自己写等于接手了原生控件的全部职责。以下每一条都不是可选项：
  *
  * - **键盘**：`↓`/`↑` 移动、`Home`/`End` 首尾、`Enter`/`Space` 选中、`Esc` 关闭
- *   且不改变选择、`Tab` 关闭并把焦点交给下一个控件。打开时焦点**留在按钮上**，
- *   靠 `aria-activedescendant` 告知读屏当前项 —— 这是 select-only combobox 的
- *   标准做法，比把焦点移进列表更稳（不会丢焦点、不用管 Tab 顺序）。
- * - **首字母跳转**：连打字母按标签前缀查找，与原生行为一致。
+ *   且不改变选择、`Tab` 关闭并把焦点交给下一个控件。焦点**留在控件本身**，靠
+ *   `aria-activedescendant` 告知读屏当前项 —— 这是 combobox 的标准做法，比把
+ *   焦点移进列表更稳（不会丢焦点、不用管 Tab 顺序）。
+ * - **首字母跳转**（非搜索模式）：连打字母按标签前缀查找，与原生行为一致。
  * - **鼠标**：点外部关闭、悬停即高亮。
  * - **视口翻转**：下方空间不足时向上展开，否则靠近页面底部的下拉会被裁掉。
+ * - **超长列表滚动**：见 `.select__list` 的 `max-height` + `overflow-y`，
+ *   并且键盘移动时活动项会自动滚入视野。
+ *
+ * ## 两种模式：为什么搜索框就是触发器本身
+ *
+ * `searchable` 打开时，触发器从按钮换成文本输入框，输入即过滤（子串匹配，
+ * 不区分大小写）。
+ *
+ * 另一种常见做法是"按钮触发器 + 面板里放一个搜索框"。这里**不采用**，因为那会
+ * 逼出两个都想当 combobox 的元素：面板里的输入框持有焦点，而 `aria-expanded` /
+ * `aria-activedescendant` 却挂在按钮上 —— 读屏此时根本不会播报当前活动项。
+ * 把输入框本身做成 combobox，一个控件一个角色，这条线才说得通。
+ *
+ * 搜索模式下**打开即清空输入并列出全部**：不打字就是浏览，打字就是搜索。关闭时
+ * 输入框恢复显示当前选中项的标签。
  *
  * ## 与原生控件的差距（已知且接受）
  *
  * 移动端的原生滚轮选择器没有了；Windows 高对比度模式下的系统配色也拿不到。
  * 这两点是为了视觉一致付出的代价。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 
 export interface SelectOption {
   value: string
@@ -43,12 +58,15 @@ const props = withDefaults(
     disabled?: boolean
     /** 没有可见标签时的无障碍名称 */
     ariaLabel?: string
+    /** 候选项多时打开：触发器变成输入框，输入即过滤 */
+    searchable?: boolean
   }>(),
   {
     label: undefined,
     placeholder: '请选择',
     disabled: false,
     ariaLabel: undefined,
+    searchable: false,
   },
 )
 
@@ -56,23 +74,43 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
 const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
+const search = ref<HTMLInputElement | null>(null)
 const list = ref<HTMLElement | null>(null)
 
 const open = ref(false)
 const activeIndex = ref(-1)
 /** 向上展开。打开时按视口空间测量一次 */
 const dropUp = ref(false)
+/** 搜索框里的内容。只在实际输入时有值，关闭后丢弃 */
+const query = ref('')
 
 const uid = useId()
 const listId = computed(() => `${uid}-list`)
 const labelId = computed(() => `${uid}-label`)
 const optionId = (index: number) => `${uid}-opt-${index}`
 
+/** 过滤后的候选项。非搜索模式或没有关键词时就是全部 */
+const items = computed<SelectOption[]>(() => {
+  const needle = query.value.trim().toLowerCase()
+  if (!props.searchable || !needle) return props.options
+  return props.options.filter((option) => option.label.toLowerCase().includes(needle))
+})
+
 const selectedIndex = computed(() =>
-  props.options.findIndex((option) => option.value === props.modelValue),
+  items.value.findIndex((option) => option.value === props.modelValue),
 )
 
-const selectedLabel = computed(() => props.options[selectedIndex.value]?.label ?? '')
+const selectedLabel = computed(
+  () => props.options.find((option) => option.value === props.modelValue)?.label ?? '',
+)
+
+/** 输入框显示什么：搜索中显示关键词，否则显示当前选中项 */
+const inputText = computed(() => (open.value ? query.value : selectedLabel.value))
+
+/** 打开且没有关键词时，把当前选中项作为灰字提示，避免忘了自己选了什么 */
+const inputPlaceholder = computed(() =>
+  open.value ? selectedLabel.value || props.placeholder : props.placeholder,
+)
 
 const activeDescendant = computed(() =>
   open.value && activeIndex.value >= 0 ? optionId(activeIndex.value) : undefined,
@@ -84,10 +122,10 @@ const nameText = computed(() => (props.label ? undefined : props.ariaLabel))
 
 /** 找第一个可用项。`delta` 为负时从末尾往前找。 */
 function firstEnabled(delta = 1): number {
-  const count = props.options.length
+  const count = items.value.length
   for (let step = 0; step < count; step += 1) {
     const index = delta > 0 ? step : count - 1 - step
-    if (!props.options[index]?.disabled) return index
+    if (!items.value[index]?.disabled) return index
   }
   return -1
 }
@@ -95,6 +133,7 @@ function firstEnabled(delta = 1): number {
 async function openMenu(preferLast = false): Promise<void> {
   if (props.disabled || open.value) return
   open.value = true
+  query.value = ''
 
   activeIndex.value =
     selectedIndex.value >= 0 ? selectedIndex.value : firstEnabled(preferLast ? -1 : 1)
@@ -108,7 +147,9 @@ function closeMenu(restoreFocus = true): void {
   if (!open.value) return
   open.value = false
   dropUp.value = false
-  if (restoreFocus) trigger.value?.focus()
+  // 关掉就把关键词丢掉，输入框恢复显示选中项 —— 否则下次打开会带着上次的搜索词
+  query.value = ''
+  if (restoreFocus && !props.searchable) trigger.value?.focus()
 }
 
 /**
@@ -118,11 +159,11 @@ function closeMenu(restoreFocus = true): void {
  * 触发器贴着视口底部时，向上翻也救不了多少。
  */
 function measureDirection(): void {
-  const triggerEl = trigger.value
+  const control = props.searchable ? search.value : trigger.value
   const listEl = list.value
-  if (!triggerEl || !listEl) return
+  if (!control || !listEl) return
 
-  const rect = triggerEl.getBoundingClientRect()
+  const rect = control.getBoundingClientRect()
   const spaceBelow = window.innerHeight - rect.bottom
   const needed = listEl.offsetHeight + 8
   dropUp.value = spaceBelow < needed && rect.top > spaceBelow
@@ -136,7 +177,7 @@ function scrollActiveIntoView(): void {
 
 /** 按方向移到下一个可用项，跳过禁用项并环绕。 */
 function move(delta: number): void {
-  const count = props.options.length
+  const count = items.value.length
   if (count === 0) return
 
   if (activeIndex.value < 0) {
@@ -148,7 +189,7 @@ function move(delta: number): void {
   let index = activeIndex.value
   for (let step = 0; step < count; step += 1) {
     index = (index + delta + count) % count
-    if (!props.options[index]?.disabled) {
+    if (!items.value[index]?.disabled) {
       activeIndex.value = index
       void nextTick(scrollActiveIntoView)
       return
@@ -163,7 +204,7 @@ function choose(option: SelectOption): void {
 }
 
 function commitActive(): void {
-  const option = props.options[activeIndex.value]
+  const option = items.value[activeIndex.value]
   if (option) choose(option)
 }
 
@@ -172,16 +213,7 @@ function hover(index: number, option: SelectOption): void {
   activeIndex.value = index
 }
 
-/**
- * 首字母跳转。
- *
- * **搜索始终从列表开头开始**，"打前缀"就落到第一项；重复按同一个字母则在同首
- * 字母的候选项之间轮换（与原生一致）。若改成"从当前项之后开始找"，打开后按一个
- * 字母会跳到第二个匹配项 —— 用户打首字母的预期是"找到它"，不是"找下一个它"。
- *
- * 无障碍名称由 `aria-labelledby` 给出，所以外层不需要（也不能）用 `<label>`：
- * `<label>` 会把点击转发给内部的按钮，点选项时会把它再点一次。
- */
+/* ---- 首字母跳转（非搜索模式）：连打字母按前缀查找，500ms 后重置 ---- */
 let typed = ''
 let typedTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -196,13 +228,14 @@ function typeAhead(char: string): void {
     typed = ''
   }, 500)
 
-  const count = props.options.length
+  const count = items.value.length
   if (count === 0) return
 
+  // 搜索始终从列表开头开始；"打首字母"的预期是找到它，不是找当前位置之后的下一个
   const start = cycling ? activeIndex.value + 1 : 0
   for (let step = 0; step < count; step += 1) {
     const index = (start + step + count) % count
-    const option = props.options[index]
+    const option = items.value[index]
     if (option && !option.disabled && option.label.toLowerCase().startsWith(typed)) {
       if (!open.value) void openMenu()
       activeIndex.value = index
@@ -210,6 +243,23 @@ function typeAhead(char: string): void {
       return
     }
   }
+}
+
+function onSearchInput(event: Event): void {
+  query.value = (event.target as HTMLInputElement).value
+  // 过滤后原来的活动项可能已经不在了，落到第一个可用项
+  activeIndex.value = firstEnabled(1)
+}
+
+function onSearchFocus(): void {
+  void openMenu()
+}
+
+/** 焦点离开整个组件时关闭（例如 Tab 走开），避免留下一个悬空的面板 */
+function onFocusOut(event: FocusEvent): void {
+  const next = event.relatedTarget as Node | null
+  if (next && root.value?.contains(next)) return
+  closeMenu(false)
 }
 
 function onTriggerKeydown(event: KeyboardEvent): void {
@@ -226,7 +276,13 @@ function onTriggerKeydown(event: KeyboardEvent): void {
       return
     }
     case 'Enter':
+      event.preventDefault()
+      if (open.value) commitActive()
+      else void openMenu()
+      return
     case ' ':
+      // 搜索模式下空格是正常的输入字符，不能当成"确认"
+      if (props.searchable) return
       event.preventDefault()
       if (open.value) commitActive()
       else void openMenu()
@@ -256,7 +312,13 @@ function onTriggerKeydown(event: KeyboardEvent): void {
       closeMenu(false)
       return
     default:
-      if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      if (
+        !props.searchable &&
+        event.key.length === 1 &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
         typeAhead(event.key)
       }
   }
@@ -269,6 +331,18 @@ function onDocumentPointerDown(event: MouseEvent): void {
   closeMenu(false)
 }
 
+/** 候选项变少时别让活动项停在越界位置 */
+watch(items, (list_) => {
+  if (activeIndex.value >= list_.length) activeIndex.value = list_.length - 1
+})
+
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled) closeMenu(false)
+  },
+)
+
 onMounted(() => document.addEventListener('mousedown', onDocumentPointerDown))
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocumentPointerDown)
@@ -279,15 +353,39 @@ onBeforeUnmount(() => {
 <template>
   <!--
     单份模板。带 label 时外层是个普通的 .field 容器（**刻意不用 `<label>`**：
-    它会把点击转发给内部的按钮，点选项时等于把按钮又点了一次，菜单会被重新
+    它会把点击转发给内部的控件，点选项时等于把按钮又点了一次，菜单会被重新
     打开）。无障碍名称走 aria-labelledby。
     ref 必须挂在这个根节点上，否则"点外部关闭"判断不到自身。
   -->
-  <div ref="root" :class="label ? 'field' : 'select-root'">
+  <div ref="root" :class="label ? 'field' : 'select-root'" @focusout="onFocusOut">
     <span v-if="label" :id="labelId" class="field__label">{{ label }}</span>
 
-    <span class="select" :class="{ 'select--open': open, 'select--disabled': disabled }">
+    <div class="select" :class="{ 'select--open': open, 'select--disabled': disabled }">
+      <!-- 搜索模式：触发器就是输入框本身，一个控件一个 combobox 角色 -->
+      <input
+        v-if="searchable"
+        ref="search"
+        type="text"
+        class="input select__trigger select__search"
+        role="combobox"
+        aria-haspopup="listbox"
+        :aria-expanded="open"
+        :aria-controls="listId"
+        :aria-activedescendant="activeDescendant"
+        :aria-labelledby="nameFrom"
+        :aria-label="nameText"
+        aria-autocomplete="list"
+        autocomplete="off"
+        :disabled="disabled"
+        :value="inputText"
+        :placeholder="inputPlaceholder"
+        @input="onSearchInput"
+        @focus="onSearchFocus"
+        @keydown="onTriggerKeydown"
+      />
+
       <button
+        v-else
         ref="trigger"
         type="button"
         class="input select__trigger"
@@ -305,8 +403,9 @@ onBeforeUnmount(() => {
         <span class="select__value" :class="{ 'select__value--empty': !selectedLabel }">
           {{ selectedLabel || placeholder }}
         </span>
-        <span class="select__caret" aria-hidden="true" />
       </button>
+
+      <span class="select__caret" aria-hidden="true" @click="open ? closeMenu() : openMenu()" />
 
       <ul
         v-if="open"
@@ -319,7 +418,7 @@ onBeforeUnmount(() => {
         :aria-label="nameText"
       >
         <li
-          v-for="(option, index) in options"
+          v-for="(option, index) in items"
           :id="optionId(index)"
           :key="option.value"
           class="select__option"
@@ -337,8 +436,13 @@ onBeforeUnmount(() => {
         >
           {{ option.label }}
         </li>
+
+        <!-- 搜不到东西时给一句话，而不是一个空气泡 -->
+        <li v-if="items.length === 0" class="select__empty" role="presentation">
+          没有匹配的选项
+        </li>
       </ul>
-    </span>
+    </div>
   </div>
 </template>
 
@@ -354,18 +458,28 @@ onBeforeUnmount(() => {
 }
 
 /* 外观复用 .input（共享样式里与 input/textarea 同一套），
-   这里只补它作为按钮需要的那几项 */
+   这里只补它作为按钮/输入框需要的那几项 */
 .select__trigger {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   text-align: left;
   cursor: pointer;
+  /* 给右侧的尖角让位，否则长文本会钻到它底下 */
+  padding-right: 34px;
 }
 
 .select__trigger:disabled {
   cursor: not-allowed;
+  color: var(--dim);
+}
+
+/* 搜索模式：输入框自己就是触发器，光标应当是文本光标 */
+.select__search {
+  cursor: text;
+}
+
+.select__search::placeholder {
   color: var(--dim);
 }
 
@@ -380,20 +494,25 @@ onBeforeUnmount(() => {
   color: var(--dim);
 }
 
-/* 用两条边转出一个尖角，而不是引图标字体或 SVG */
+/* 用两条边转出一个尖角，而不是引图标字体或 SVG。
+   绝对定位：两种模式的触发器高度不同，这样不用各写一套 */
 .select__caret {
-  flex: none;
+  position: absolute;
+  top: 50%;
+  right: 12px;
   width: 7px;
   height: 7px;
-  margin-top: -3px;
+  margin-top: -5px;
   border-right: 1.5px solid var(--mute);
   border-bottom: 1.5px solid var(--mute);
   transform: rotate(45deg);
   transition: transform var(--transition-fast);
+  cursor: pointer;
 }
 
 .select--open .select__caret {
-  transform: rotate(-135deg) translate(-2px, -2px);
+  margin-top: -2px;
+  transform: rotate(-135deg);
   border-color: var(--red-hi);
 }
 
@@ -406,6 +525,7 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 4px;
   list-style: none;
+  /* 超过这个高度就在列表内部滚动，而不是把页面撑长 */
   max-height: 260px;
   overflow-y: auto;
   background: var(--panel);
@@ -450,5 +570,12 @@ onBeforeUnmount(() => {
 .select__option--disabled {
   color: var(--dim);
   cursor: not-allowed;
+}
+
+.select__empty {
+  padding: 10px;
+  font-size: 12.5px;
+  color: var(--dim);
+  text-align: center;
 }
 </style>

@@ -180,13 +180,18 @@ onMounted(async () => {
 
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
 
+    <!--
+      选择规则：候选项来自数据、数量不可预期时开搜索（活动、分类都是），
+      固定枚举（状态四档）看得完，不必搜。
+    -->
     <div class="panel filters">
-      <Select v-model="eventId" label="活动" :options="eventOptions" />
+      <Select v-model="eventId" label="活动" :options="eventOptions" searchable />
 
       <Select
         v-model="kind"
         label="分类"
         :options="[{ value: '', label: '全部' }, ...kindOptions]"
+        searchable
       />
 
       <Select v-model="status" label="状态" :options="STATUS_OPTIONS" />
