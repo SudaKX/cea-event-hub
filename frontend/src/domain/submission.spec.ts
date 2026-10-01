@@ -12,7 +12,8 @@ import {
   SUBMISSION_STATUS_LABELS,
   SUBMISSION_STATUS_OPTIONS,
   parseStatusFilter,
-  payloadDetail,
+  payloadDisplay,
+  payloadJson,
   payloadSummary,
   statusLabel,
   statusTone,
@@ -108,21 +109,40 @@ describe('$display 摘要', () => {
   })
 })
 
-describe('$display 展开内容', () => {
-  it('没有该字段时就是格式化 JSON', () => {
-    const detail = payloadDetail({ a: 1 })
-    expect(detail).toContain('"a": 1')
+describe('$display 单独取值', () => {
+  it('合规时给出字符串', () => {
+    expect(payloadDisplay({ [DISPLAY_KEY]: '摘要' })).toBe('摘要')
   })
 
-  it('有该字段时摘要在前，完整 JSON 仍在后面', () => {
-    // $display 是摘要，不该把原始数据挡在后面 —— 展开的目的常常正是看摘要没覆盖到的字段
-    const detail = payloadDetail({ [DISPLAY_KEY]: '摘要', secret_field: 'x' })
-    expect(detail.indexOf('摘要')).toBeLessThan(detail.indexOf('原始数据'))
-    expect(detail).toContain('secret_field')
-    expect(detail).toContain('"x"')
+  it('缺失、空串、纯空白、非字符串都返回 null', () => {
+    // 详情对话框据此决定要不要显示那行导读
+    expect(payloadDisplay({})).toBeNull()
+    expect(payloadDisplay({ [DISPLAY_KEY]: '' })).toBeNull()
+    expect(payloadDisplay({ [DISPLAY_KEY]: '   ' })).toBeNull()
+    expect(payloadDisplay({ [DISPLAY_KEY]: 42 })).toBeNull()
+    expect(payloadDisplay({ [DISPLAY_KEY]: { a: 1 } })).toBeNull()
   })
 
-  it('始终是格式化过的 JSON，不是一行挤在一起', () => {
-    expect(payloadDetail({ a: 1, b: 2 })).toContain('\n')
+  it('与摘要保持一致：摘要就是它，或退回 JSON', () => {
+    const payload = { [DISPLAY_KEY]: '摘要', name: '张三' }
+    expect(payloadSummary(payload)).toBe(payloadDisplay(payload))
+  })
+})
+
+describe('详情里的原始数据', () => {
+  it('始终是完整 JSON，不受 $display 影响', () => {
+    // 打开详情的目的大多正是看摘要没覆盖到的字段，摘要不能把原始数据挡在后面
+    const json = payloadJson({ [DISPLAY_KEY]: '摘要', secret_field: 'x' })
+    expect(json).toContain('secret_field')
+    expect(json).toContain('"x"')
+    expect(json).toContain(DISPLAY_KEY)
+  })
+
+  it('格式化过，不是一行挤在一起', () => {
+    expect(payloadJson({ a: 1, b: 2 })).toContain('\n')
+  })
+
+  it('空对象也能正常渲染', () => {
+    expect(payloadJson({})).toBe('{}')
   })
 })

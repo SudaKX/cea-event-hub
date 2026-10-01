@@ -75,6 +75,16 @@ export function parseStatusFilter(value: string): number | undefined {
 export const DISPLAY_KEY = '$display'
 
 /**
+ * `$display` 的值，没有或不合规时返回 null。
+ *
+ * 详情对话框用它做一行导读，所以要和"退回 JSON"分开 —— 那里 JSON 是单独一块。
+ */
+export function payloadDisplay(payload: Record<string, unknown>): string | null {
+  const value = payload[DISPLAY_KEY]
+  return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+/**
  * 列表那一格显示什么。
  *
  * 活动页给了 `payload.$display` 就显示它 —— 一串给人读的摘要，比整段 JSON 好认
@@ -84,20 +94,15 @@ export const DISPLAY_KEY = '$display'
  * 提交可以是匿名的 —— 拿它去 `v-html` 等于把 XSS 交给任何一个访客。
  */
 export function payloadSummary(payload: Record<string, unknown>): string {
-  const value = payload[DISPLAY_KEY]
-  if (typeof value === 'string' && value.trim() !== '') return value
-  return JSON.stringify(payload)
+  return payloadDisplay(payload) ?? JSON.stringify(payload)
 }
 
 /**
- * 展开面板里的完整内容。
+ * 详情对话框里的原始数据。
  *
- * **始终包含完整 JSON**：`$display` 是摘要，它不该把原始数据挡在后面 —— 管理员
- * 展开的目的往往正是看摘要没覆盖到的字段。
+ * **始终是完整 JSON**，不受 `$display` 影响 —— 打开详情的目的大多正是看摘要没
+ * 覆盖到的字段。
  */
-export function payloadDetail(payload: Record<string, unknown>): string {
-  const json = JSON.stringify(payload, null, 2)
-  const display = payload[DISPLAY_KEY]
-  if (typeof display !== 'string' || display.trim() === '') return json
-  return `${display}\n\n原始数据\n${json}`
+export function payloadJson(payload: Record<string, unknown>): string {
+  return JSON.stringify(payload, null, 2)
 }

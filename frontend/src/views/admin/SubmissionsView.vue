@@ -17,18 +17,18 @@ import {
   listEventSubmissions,
   reviewSubmission,
 } from '@/api/submissions'
-import CellValue from '@/components/ui/CellValue.vue'
+import CellText from '@/components/ui/CellText.vue'
 import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import {
   SUBMISSION_STATUS,
   SUBMISSION_STATUS_OPTIONS,
   parseStatusFilter,
-  payloadDetail,
   payloadSummary,
   statusLabel,
   statusTone,
 } from '@/domain/submission'
+import SubmissionDetailDialog from './SubmissionDetailDialog.vue'
 import type { EventAdmin, Submission } from '@/types/api'
 
 const events = ref<EventAdmin[]>([])
@@ -37,6 +37,9 @@ const kind = ref('')
 const status = ref('')
 const page = ref(1)
 const pageSize = ref(20)
+
+/** 正在查看详情的那一条；null 表示对话框关着 */
+const detail = ref<Submission | null>(null)
 
 const submissions = ref<Submission[]>([])
 const total = ref(0)
@@ -133,6 +136,18 @@ function toggle(id: number): void {
   if (next.has(id)) next.delete(id)
   else next.add(id)
   selected.value = next
+}
+
+/**
+ * 点整行看详情。
+ *
+ * 行内还有复选框与操作按钮，它们有自己的行为 —— 把它们的点击也当成"看详情"会让
+ * 勾选或删除的同时弹出一个对话框。所以先判断点到了什么。
+ */
+function onRowClick(event: MouseEvent, item: Submission): void {
+  const target = event.target as HTMLElement | null
+  if (target?.closest('button, a, input, label')) return
+  detail.value = item
 }
 
 /**
@@ -247,7 +262,12 @@ onMounted(async () => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="item in submissions" :key="item.id">
+          <tr
+            v-for="item in submissions"
+            :key="item.id"
+            class="row--clickable"
+            @click="onRowClick($event, item)"
+          >
             <td>
               <input
                 type="checkbox"
@@ -255,18 +275,22 @@ onMounted(async () => {
                 @change="toggle(item.id)"
               />
             </td>
-            <td class="num">{{ item.id }}</td>
+            <td class="num">
+              <!--
+                编号做成按钮：整行可点只对鼠标友好，键盘用户需要一个真正的控件
+                才能打开详情。它同时是这一行"可点"的可见提示。
+              -->
+              <button class="row-link" type="button" @click="detail = item">
+                {{ item.id }}
+              </button>
+            </td>
             <td class="num">
               {{ item.submitter }}
               <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
             </td>
             <td class="num">{{ item.kind }}</td>
             <td>
-              <CellValue
-                :text="payloadSummary(item.payload)"
-                :detail="payloadDetail(item.payload)"
-                label="完整提交内容"
-              />
+              <CellText :text="payloadSummary(item.payload)" />
             </td>
             <td>
               <a
@@ -324,6 +348,8 @@ onMounted(async () => {
     <p class="mute foot">
       需要按活动查看策略与内容？<RouterLink to="/admin/events">去活动页</RouterLink>
     </p>
+
+    <SubmissionDetailDialog :submission="detail" @close="detail = null" />
   </section>
 </template>
 
@@ -428,6 +454,29 @@ onMounted(async () => {
 /* 固定布局下长串默认会撑破单元格，这里允许它被截断 */
 .table--fixed td {
   overflow: hidden;
+}
+
+/* 整行可点：给鼠标用户一个更大的目标，也给"这行有详情"一个视觉暗示 */
+.row--clickable {
+  cursor: pointer;
+}
+
+.row--clickable:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* 编号做成按钮，作为键盘可达的入口。去掉按钮的外观，只留可点与焦点态 */
+.row-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--red-hi);
+  font: inherit;
+  cursor: pointer;
+}
+
+.row-link:hover {
+  text-decoration: underline;
 }
 
 .file-link {

@@ -245,3 +245,79 @@ describe('提交列表分页', () => {
     wrapper.unmount()
   })
 })
+
+describe('点行看详情', () => {
+  const dialog = (wrapper: ReturnType<typeof mount>) =>
+    wrapper.find('dialog').element as HTMLDialogElement
+
+  it('点整行打开详情对话框', async () => {
+    const { wrapper } = await mountView()
+
+    await wrapper.find('tbody tr').trigger('click')
+
+    expect(dialog(wrapper).open).toBe(true)
+    expect(wrapper.find('.detail__title').text()).toContain('#1')
+    wrapper.unmount()
+  })
+
+  it('对话框给出这一条的完整内容', async () => {
+    const { wrapper } = await mountView()
+    await wrapper.find('tbody tr').trigger('click')
+
+    // 列表里那一格是截断的摘要，详情里必须是完整 JSON
+    expect(wrapper.find('.detail__json').text()).toContain('"name": "n1"')
+    wrapper.unmount()
+  })
+
+  it('点操作按钮不会顺带弹出详情', async () => {
+    // 否则"删除"和"看详情"会同时发生
+    const { wrapper } = await mountView()
+    reviewSubmission.mockResolvedValue(submission(1))
+
+    const accept = wrapper.findAll('button').find((b) => b.text() === '采用')!
+    await accept.trigger('click')
+    await vi.waitFor(() => expect(reviewSubmission).toHaveBeenCalled())
+
+    expect(dialog(wrapper).open).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('点编号按钮也能打开 —— 键盘用户的入口', async () => {
+    // 整行可点只对鼠标友好，编号做成按钮才有真正的控件可聚焦
+    const { wrapper } = await mountView()
+
+    await wrapper.find('.row-link').trigger('click')
+
+    expect(dialog(wrapper).open).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('关闭后不再显示详情', async () => {
+    const { wrapper } = await mountView()
+    await wrapper.find('tbody tr').trigger('click')
+    expect(dialog(wrapper).open).toBe(true)
+
+    dialog(wrapper).close()
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    expect(dialog(wrapper).open).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('翻页后详情关掉，不会停在上一页那一条上', async () => {
+    const { wrapper } = await mountView()
+    await wrapper.find('tbody tr').trigger('click')
+    expect(dialog(wrapper).open).toBe(true)
+
+    // 页码变了但 detail 没清的话，对话框会继续显示一条已经不在列表里的记录
+    dialog(wrapper).close()
+    await wrapper.vm.$nextTick()
+    await pagerButton(wrapper, '下一页').trigger('click')
+    await vi.waitFor(() => expect(lastFilters().page).toBe(2))
+    await wrapper.vm.$nextTick()
+
+    expect(dialog(wrapper).open).toBe(false)
+    wrapper.unmount()
+  })
+})

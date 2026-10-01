@@ -7,16 +7,16 @@ import { ApiError } from '@/api/client'
 import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } from '@/api/events'
 import { deleteSubmission, listEventSubmissions, reviewSubmission } from '@/api/submissions'
 import { attachmentUrl } from '@/api/submissions'
-import CellValue from '@/components/ui/CellValue.vue'
+import CellText from '@/components/ui/CellText.vue'
 import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import {
   SUBMISSION_STATUS,
-  payloadDetail,
   payloadSummary,
   statusLabel,
   statusTone,
 } from '@/domain/submission'
+import SubmissionDetailDialog from './SubmissionDetailDialog.vue'
 import type { ContentFile, EventAdmin, Submission } from '@/types/api'
 
 const props = defineProps<{ eventId: string }>()
@@ -35,6 +35,8 @@ const submissions = ref<Submission[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
+/** 正在查看详情的那一条；null 表示对话框关着 */
+const detail = ref<Submission | null>(null)
 const error = ref('')
 const notice = ref('')
 const loading = ref(true)
@@ -195,6 +197,18 @@ async function onDeleteSubmission(submission: Submission): Promise<void> {
   }
 }
 
+/**
+ * 点整行看详情。
+ *
+ * 行内还有操作按钮，它们有自己的行为 —— 把它们的点击也当成"看详情"会让人在删除
+ * 的同时弹出一个对话框。所以先判断点到了什么。
+ */
+function onRowClick(event: MouseEvent, item: Submission): void {
+  const target = event.target as HTMLElement | null
+  if (target?.closest('button, a, input, label')) return
+  detail.value = item
+}
+
 async function onDeleteEvent(): Promise<void> {
   if (!window.confirm(`删除活动 ${props.eventId}？提交与附件会一并移除，不可撤销。`)) return
   try {
@@ -325,8 +339,18 @@ watch(
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in submissions" :key="item.id">
-              <td class="num">{{ item.id }}</td>
+            <tr
+              v-for="item in submissions"
+              :key="item.id"
+              class="row--clickable"
+              @click="onRowClick($event, item)"
+            >
+              <td class="num">
+                <!-- 整行可点只对鼠标友好，键盘用户需要这个真正的控件 -->
+                <button class="row-link" type="button" @click="detail = item">
+                  {{ item.id }}
+                </button>
+              </td>
               <td class="num">
                 {{ item.submitter }}
                 <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
@@ -334,11 +358,7 @@ watch(
               <td class="num">{{ item.kind }}</td>
               <td>
                 <!-- 按原始键值展示，不假设字段语义；$display 只影响摘要那一行 -->
-                <CellValue
-                  :text="payloadSummary(item.payload)"
-                  :detail="payloadDetail(item.payload)"
-                  label="完整提交内容"
-                />
+                <CellText :text="payloadSummary(item.payload)" />
               </td>
               <td>
                 <a
@@ -393,6 +413,8 @@ watch(
         />
       </div>
     </template>
+
+    <SubmissionDetailDialog :submission="detail" @close="detail = null" />
   </section>
 </template>
 
@@ -494,6 +516,29 @@ watch(
 /* 固定布局下长串默认会撑破单元格，这里允许它被截断 */
 .table--fixed td {
   overflow: hidden;
+}
+
+/* 整行可点：给鼠标用户一个更大的目标，也给"这行有详情"一个视觉暗示 */
+.row--clickable {
+  cursor: pointer;
+}
+
+.row--clickable:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* 编号做成按钮，作为键盘可达的入口。去掉按钮的外观，只留可点与焦点态 */
+.row-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--red-hi);
+  font: inherit;
+  cursor: pointer;
+}
+
+.row-link:hover {
+  text-decoration: underline;
 }
 
 .file-link {
