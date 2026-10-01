@@ -10,11 +10,14 @@
   三件必须记住的事：
     1. **不需要引入 SDK** —— 平台会在返回你的 HTML 时自动插入
        <script src="/sdk/v1/cea.js" id="cea-sdk"></script>
-       本文件在下面仍然显式写了那一行，用来演示"自己写也可以"：托管层检测到
-       已有 id="cea-sdk" 就不会重复注入。
-       **判断只看 id，不看 src** —— 所以自己写时 id 不能省。
+       本文件在下面仍然显式写了那一行，用来演示"自己写也可以"。
+       **判断只看 id，不看 src** —— 自己写时 id 不能省，否则会被判定成
+       "没有引用"而再插一个标签，SDK 加载两次。
     2. 不要试图 fetch('/api/...') —— 沙箱下这是被浏览器拦死的
     3. 不要在这个文件里放任何秘密：/content/** 是公开可读的
+
+  版面：活动页占满整个视口，宿主不叠任何自己的界面。页面自己滚动，
+  正常写 HTML 即可。
 
   这份文件连同同目录的其他资源一起打成 zip 投放即可。
 -->
@@ -167,9 +170,10 @@
     CEA.draft.save(snapshot, FORM_KEY).catch(() => {});
   });
 
-  // 让宿主知道内容高度，避免 iframe 里出现双层滚动条
-  CEA.resize();
-  new ResizeObserver(() => CEA.resize()).observe(document.body);
+  // 不需要通知宿主内容高度：活动页占满整个视口，自己负责滚动。
+  // （早期版本需要调 CEA.resize()，那是"iframe 按内容高度撑开"的旧版式；
+  //   那种版式会让长页面产生双层滚动条，已经去掉了。CEA.resize() 现在
+  //   是空操作，仅为兼容保留。）
 
   // ---- 提交 ----
   form.addEventListener('submit', async (event_) => {
@@ -195,6 +199,14 @@
         kind: FORM_KEY,
         // 幂等键：网络抖动导致重试时，服务端会返回原提交而不是新建一条
         idempotencyKey: crypto.randomUUID(),
+        // 真实上传进度：请求由宿主发出，它能拿到 axios 的 onUploadProgress
+        // 再回推过来。total 为 null 时（服务端未给总长）只能显示已传字节数。
+        onProgress: (loaded, total) => {
+          if (files.length === 0) return;
+          show(total
+            ? '上传中… ' + Math.round((loaded / total) * 100) + '%'
+            : '上传中… ' + loaded + ' 字节');
+        },
       });
 
       if (result.deduplicated) {

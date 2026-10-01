@@ -164,23 +164,32 @@ Cookie 处在完全不同安全等级的原因。
 
 | 方向 | type | 说明 |
 |---|---|---|
-| 活动页 → 宿主 | `event:resize` | `{height}`，宿主据此调整 iframe 高度 |
+| 活动页 → 宿主 | `event:resize` | `{height}`。**宿主已忽略**：活动页占满视口、自己滚动，按内容高度撑开 iframe 会让长页面产生双层滚动条。消息仍然接受，旧活动页调用 `CEA.resize()` 不会报错 |
 | | `event:navigate` | `{to}`，**只接受站内路径**，外部地址被忽略 |
-| | `event:title` | `{title}` |
+| | `event:title` | `{title}`，写入 `document.title` |
 | | `event:toast` | `{level, message}` |
 | | `event:error` | `{message}` |
-| 宿主 → 活动页 | `hub:upload-progress` | `{requestId, loaded, total}` |
+| 宿主 → 活动页 | `hub:upload-progress` | `{requestId, loaded, total}`。**载荷里带 requestId**，因为它是过程中的推送而不是对某条消息的应答；SDK 按这个 id 找到发起该请求的回调 |
 | | `hub:theme` | 设计令牌 |
 
 ## SDK 的引入方式
 
-**由托管层自动注入，作者无需记得写。** 内容服务端在返回 HTML 前检查：页面里
-已经有 `/sdk/v1/cea.js` 或 `id="cea-sdk"` 的标签就原样返回，否则在 `</head>` 前
-补一行：
+**由托管层自动注入，作者无需记得写。** 内容服务端在返回 HTML 前检查页面里有没有
+`id="cea-sdk"` 的 `<script>`：**没有就在 `</head>` 前补一行，有就原样返回。**
 
 ```html
 <script src="/sdk/v1/cea.js" id="cea-sdk"></script>
 ```
+
+### 判断只看 `id`，不看 `src`
+
+路径会变（`/sdk/v1/` → `/sdk/v2/`）。按 `src` 判断的话，SDK 一换路径所有老页面都会
+被判定成"没有引用"，于是被插入新标签、SDK 加载两次。`id` 是稳定的。
+
+**不做迁移。** 早期指南里的 `<script src="/sdk/v1/cea.js"></script>`（没有 id）不特殊
+处理 —— 它被判定成"没有引用"，因而得到一个注入的新标签，结果是 SDK 加载两次。这是
+刻意接受的代价：与其在代码里长期维护一条迁移路径，不如让老页面显式改过来（示例内容
+已经改好）。有一个测试把这个行为钉住，免得日后被当成 bug 来"修"。
 
 ### 为什么必须由服务端做，而不是宿主注入
 
@@ -198,11 +207,20 @@ Cookie 处在完全不同安全等级的原因。
 脚本，`id` 的"唯一"正好对上 `class` 的"可多个"。它同时给活动页一个稳定的抓手 ——
 `document.getElementById('cea-sdk')`。
 
-### 幂等与开关
+### 定位方式：HTMLParser，不是正则
 
-活动页自己写了引用就不再注入，两种写法都能工作。开关是 `CONTENT_SDK_INJECT`
-（默认开），关掉即回到"必须显式引用"。注入只作用于 `.html` / `.htm`，其他文件
-原样返回。
+`</head>` 可能出现在**注释**里或**内联脚本的字符串**里。正则会把插入点放到那里面，
+标签等于没插 —— SDK 不加载，而页面看上去一切正常。`HTMLParser` 把注释交给
+`handle_comment`、把 `<script>` 内容按 CDATA 处理，两种情况都不会误判。
+
+也不用 XML 解析：活动页是手写 HTML5（`<br>`、未加引号的属性值都是合法 HTML 但非法
+XML），而且树模式必须把文档序列化回去 —— 那会重写作者的文件。本模块只插入一个
+子串，从不改写其它字节。
+
+### 开关
+
+`CONTENT_SDK_INJECT`（默认开），关掉即回到"必须自己写"。`CONTENT_SDK_PATH` 可改
+SDK 路径。注入只作用于 `.html` / `.htm`，其他文件原样返回。
 
 ## 就绪诊断仍然保留
 
@@ -212,8 +230,7 @@ Cookie 处在完全不同安全等级的原因。
 - SDK 文件本身没构建（`dist/sdk/v1/cea.js` 不存在，例如没跑过 `npm run build:sdk`）
 - 活动页自己的脚本在 SDK 加载完成之前抛错，中断了后续执行
 
-诊断比任何文档都管用：没有它，作者看到的是一片空白或固定高度的 iframe，完全
-无从判断哪里出了问题。
+诊断比任何文档都管用：没有它，作者看到的是一片空白，完全无从判断哪里出了问题。
 
 ## 测试对照
 

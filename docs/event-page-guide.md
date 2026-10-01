@@ -6,8 +6,7 @@
 
 ```html
 <!-- 1. 不需要引入 SDK —— 平台会在返回你的 HTML 时自动插入这一行：
-     <script src="/sdk/v1/cea.js" id="cea-sdk"></script>
-     想自己显式写也完全可以；平台检测到已有引用就不会重复插入。 -->
+     <script src="/sdk/v1/cea.js" id="cea-sdk"></script> -->
 
 <script>
   // 2. 等宿主握手完成，拿到身份描述符
@@ -19,29 +18,48 @@
 </script>
 ```
 
-**SDK 是自动注入的。** 托管层返回 HTML 前检查：页面里已经有 `/sdk/v1/cea.js`
-或 `id="cea-sdk"` 的标签就原样返回，没有就在 `</head>` 前补一行。所以"忘了引入
-SDK"不再是可能犯的错误。
+**SDK 是自动注入的。** 托管层返回 HTML 前检查页面里有没有 `id="cea-sdk"` 的
+`<script>`：**没有就注入，有就原样返回**。所以"忘了引入 SDK"不是可能犯的错误。
 
-注入的那一行带 `id="cea-sdk"`，你可以用 `document.getElementById('cea-sdk')`
-判断它是否就位。
+### 如果你想自己写那一行
 
-> 需要关掉注入时设 `CONTENT_SDK_INJECT=false`，即回到"必须显式引用"的行为。
+完全可以，但 **`id="cea-sdk"` 不能省**：
+
+```html
+<script src="/sdk/v1/cea.js" id="cea-sdk"></script>   <!-- 正确 -->
+<script src="/sdk/v1/cea.js"></script>                <!-- 错误：会被判定为"没有引用" -->
+```
+
+**判断只看 `id`，不看 `src`。** 理由是路径会变（`/sdk/v1/` → `/sdk/v2/`），按 `src`
+判断的话 SDK 一换路径，所有老页面都会被判成"没有引用"。
+
+上面第二种写法**不会被特殊照顾**（平台不做迁移），结果是平台再插一个标签，**SDK
+加载两次**。目前这不影响功能，但没必要。
+
+### 注入标签的识别
+
+注入的那一行带 `id="cea-sdk"`，你可以据此判断 SDK 是否就位：
+
+```js
+const sdkReady = document.getElementById('cea-sdk') !== null
+```
+
+> 需要关掉注入时设 `CONTENT_SDK_INJECT=false`，即回到"必须自己写"的行为。
 
 ## 可用方法
 
 | 方法 | 说明 |
 |---|---|
-| `await CEA.ready` | 握手完成，返回身份描述符 |
+| `await CEA.ready` | 握手完成，返回身份描述符；10 秒未握手则 reject |
 | `CEA.identity()` | 同步读取当前身份（未就绪时为 `null`） |
-| `await CEA.event()` | 当前活动的公开信息（标题、配额、是否需登录） |
+| `await CEA.event()` | 当前活动的公开信息（标题、配额、是否需登录、开放/截止时间） |
 | `await CEA.submit({...})` | 提交信息与文件 |
 | `await CEA.me()` | 当前身份描述符（走一次 RPC） |
 | `await CEA.mySubmissions()` | 自己的提交历史（**未登录会失败**） |
 | `CEA.toast(message, level?)` | 请求宿主弹提示 |
 | `CEA.navigate(path)` | 请求宿主导航（只接受站内路径） |
-| `CEA.setTitle(title)` | 更新宿主顶部标题 |
-| `CEA.resize()` | 通知宿主调整 iframe 高度 |
+| `CEA.setTitle(title)` | 更新**浏览器标签标题** |
+| `CEA.resize()` | 空操作，保留兼容（见下方"版面"） |
 | `CEA.draft.save/load/clear(value?, formKey?)` | 草稿存取 |
 
 ### `CEA.submit` 的参数
@@ -52,7 +70,7 @@ await CEA.submit({
   files: [File, File],        // 可选
   kind: 'signup',             // 可选分类标签，管理端据此分组
   idempotencyKey: crypto.randomUUID(),  // 强烈建议带上
-  onProgress: (loaded, total) => {},    // 可选
+  onProgress: (loaded, total) => {},    // 可选，真实上传进度
 });
 ```
 
@@ -61,6 +79,19 @@ await CEA.submit({
 
 **建议始终带 `idempotencyKey`。** 网络抖动或用户连点导致重试时，服务端会返回原提交
 而不是新建一条，返回值的 `deduplicated` 为 `true`。
+
+**`onProgress` 是真实进度。** 请求由宿主发出，所以它能拿到上传进度并回推给活动页；
+`total` 在服务端未提供总长时为 `null`，此时只能显示"已上传 N 字节"。
+
+## 版面：活动页自己负责滚动
+
+活动页**占满整个视口**，宿主不在上面叠任何自己的界面（没有顶部栏、没有标题栏）。
+因此：
+
+- **页面自己滚动** —— 正常写你的 HTML 即可，内容超长时是页面内部滚动
+- **不要依赖 `CEA.resize()`** —— 它现在什么都不做。它的存在是为了兼容早期调用；
+  在"iframe 按内容高度撑开"的旧版式下才有意义，而那种版式会让长页面产生双层滚动条
+- 想改浏览器标签标题用 `CEA.setTitle()`，活动标题默认已经写进去了
 
 ## 能力边界：这些事做不到
 
