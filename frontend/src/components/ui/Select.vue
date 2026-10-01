@@ -39,9 +39,9 @@
  * 这个矛盾才根本消失，而且鼠标与键盘可以走同一条焦点路径（都交回按钮），
  * 键盘用户选完接着 Tab 也不会丢位置。
  *
- * 代价是**两个元素的默认盒模型不同**，切换时会有高度与配色上的跳变。那几处都在
- * 样式里逐条钉死了（`min-height`、`--has-selection`、尖角的 `transform`），
- * 否则点一下控件就会"闪"一下。
+ * 代价是**两个元素的默认盒模型不同**，切换时会有高度上的跳变。那几处都在样式里
+ * 逐条钉死了（`min-height`、尖角的 `transform`、打开态的边框），否则点一下控件
+ * 就会"闪"一下。
  *
  * ## 与原生控件的差距（已知且接受）
  *
@@ -120,8 +120,9 @@ const visibleSelectedIndex = computed(() =>
 /**
  * 打开时输入框里的灰字提示。
  *
- * 它承载的是"当前选中项"，不是"请选择"，所以样式上要跟正文同色（见
- * `.select__search--has-selection`）—— 否则点开的一瞬间文字会由亮变暗。
+ * 优先显示当前选中项 —— 打开后输入框是空的，不这样写就看不见自己原本选了什么。
+ * 它仍然是**提示**，用占位色（见 `.select__search::placeholder`），不能看起来像
+ * 已经输入的内容。
  */
 const searchPlaceholder = computed(() => selectedLabel.value || props.placeholder)
 
@@ -449,7 +450,6 @@ onBeforeUnmount(() => {
         ref="search"
         type="text"
         class="input select__trigger select__search"
-        :class="{ 'select__search--has-selection': !!selectedLabel }"
         role="combobox"
         aria-haspopup="listbox"
         :aria-expanded="open"
@@ -576,16 +576,16 @@ onBeforeUnmount(() => {
   cursor: text;
 }
 
+/*
+  打开时输入框是空的，显示的是灰字提示。它承载的可能是当前选中项，但**仍然要用
+  占位色** —— 这是"提示"，不是"你输入的内容"。
+
+  曾经为了消除"点开时文字由亮变暗"把它改成正文色，那是错的：亮度变化本身正是应有
+  的语义反馈（按钮上的值 → 搜索时的提示）。一行看起来像已输入内容的灰字，比一次
+  颜色变化糟糕得多。
+*/
 .select__search::placeholder {
   color: var(--dim);
-}
-
-/*
-  打开时输入框的灰字提示承载的是"当前选中项"，不是"请选择"。
-  用正文色而不是占位色 —— 否则点开的一瞬间那行字会由亮变暗，看起来像闪了一下。
-*/
-.select__search--has-selection::placeholder {
-  color: var(--bone);
 }
 
 /*

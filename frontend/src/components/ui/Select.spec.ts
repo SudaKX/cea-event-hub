@@ -751,27 +751,35 @@ describe('切换时不闪', () => {
     expect(source).toMatch(/\.select--open \.select__trigger\s*\{[^}]*border-color/)
   })
 
-  it('灰字提示承载选中项时用正文色', () => {
-    // 否则点开时那行字会由 --bone 变成 --dim，看起来像闪了一下。
-    // 具体的类绑定由下面两条断言。
-    expect(source).toMatch(
-      /\.select__search--has-selection::placeholder\s*\{[^}]*var\(--bone\)/,
-    )
+  it('灰字提示一律用占位色，不因为承载选中项就变成正文色', () => {
+    // 曾经为了让"点开时文字由亮变暗"消失，把承载选中项的提示改成了正文色。
+    // 那是错的：一行看起来像已输入内容的灰字，比一次颜色变化糟糕得多。
+    // 亮度变化本身正是应有的语义反馈（按钮上的值 → 搜索时的提示）。
+    expect(source).toMatch(/\.select__search::placeholder\s*\{[^}]*var\(--dim\)/)
+    expect(source).not.toContain('has-selection')
   })
 
-  it('打开且已选中时，输入框确实带上了标记类', async () => {
+  it('打开后显示的是选中项，但作为提示而不是已输入内容', async () => {
     const wrapper = makeSearchable({ modelValue: 'workshop' })
     await openMenu(wrapper)
 
-    expect(searchInput(wrapper).classes()).toContain('select__search--has-selection')
+    const input = searchInput(wrapper).element as HTMLInputElement
+    // 值是空的、标签走 placeholder —— 所以它天然是提示样式
+    expect(input.value).toBe('')
+    expect(input.placeholder).toBe('workshop — 嵌入式工作坊')
     wrapper.unmount()
   })
 
-  it('没有选中项时不带标记类（"请选择"仍用占位色）', async () => {
-    const wrapper = makeSearchable({ modelValue: '' })
+  it('打开后用户真打了字，那才是输入内容', async () => {
+    const wrapper = makeSearchable({ modelValue: 'workshop' })
     await openMenu(wrapper)
+    await searchInput(wrapper).setValue('hack')
+    await wrapper.vm.$nextTick()
 
-    expect(searchInput(wrapper).classes()).not.toContain('select__search--has-selection')
+    const input = searchInput(wrapper).element as HTMLInputElement
+    expect(input.value).toBe('hack')
+    // placeholder 还在，但此时显示的是值而不是提示
+    expect(input.placeholder).toBe('workshop — 嵌入式工作坊')
     wrapper.unmount()
   })
 
