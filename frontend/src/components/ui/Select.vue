@@ -200,10 +200,27 @@ function move(delta: number): void {
   }
 }
 
-function choose(option: SelectOption): void {
+/**
+ * 选中一项。
+ *
+ * `fromMouse` 决定**焦点交给谁** —— 这是两种输入方式真正不同的地方：
+ *
+ * - **鼠标选完，把焦点交出去。** 输入框保持聚焦时会出现文本光标，看起来像"还
+ *   在编辑"，而用户已经选完了。原生 `<select>` 选完也保留焦点，但它不是文本框、
+ *   不显示光标，所以没这个观感问题。
+ * - **键盘选完，焦点必须留在控件上。** 否则接下来的 `Tab` 会从 `body` 开始，
+ *   键盘用户直接迷路。
+ */
+function choose(option: SelectOption, fromMouse = false): void {
   if (option.disabled) return
   if (option.value !== props.modelValue) emit('update:modelValue', option.value)
-  closeMenu()
+
+  if (fromMouse) {
+    closeMenu(false)
+    if (props.searchable) search.value?.blur()
+    return
+  }
+  closeMenu(true)
 }
 
 function commitActive(): void {
@@ -452,7 +469,7 @@ onBeforeUnmount(() => {
           role="option"
           :aria-selected="option.value === modelValue"
           :aria-disabled="option.disabled || undefined"
-          @click="choose(option)"
+          @click="choose(option, true)"
           @mouseenter="hover(index, option)"
         >
           {{ option.label }}

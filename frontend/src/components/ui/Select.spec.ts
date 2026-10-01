@@ -6,6 +6,7 @@
  * ARIA 接线、点外部关闭、跳过禁用项。少一样就是一次可访问性回归。
  */
 import { mount } from '@vue/test-utils'
+import { defineComponent, ref } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 
 import Select, { type SelectOption } from './Select.vue'
@@ -550,6 +551,119 @@ describe('失焦与鼠标点击', () => {
     await wrapper.setProps({ disabled: true })
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* 选中后的展示状态                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 这一组需要**真实的 v-model 回写**：只有父组件把新值传回来，"选中后展示什么"
+ * 才有意义。`make*` 那几个 helper 用的是静态 props，断言不到这个。
+ */
+const Host = defineComponent({
+  components: { Select },
+  props: { options: { type: Array, required: true }, searchable: Boolean },
+  setup(props) {
+    const picked = ref('')
+    return { picked, props }
+  },
+  template: `<Select v-model="picked" label="活动" :options="options" :searchable="searchable" />`,
+})
+
+function makeHost(options: SelectOption[], searchable = false) {
+  return mount(Host, { props: { options, searchable }, attachTo: document.body })
+}
+
+describe('选中后的展示状态', () => {
+  const OPTIONS: SelectOption[] = [
+    { value: 'spring-2026', label: 'spring-2026 — 春季招新' },
+    { value: 'workshop', label: 'workshop — 嵌入式工作坊' },
+    { value: 'hackathon', label: 'hackathon — 黑客松' },
+  ]
+
+  it('搜索模式下鼠标选中后失焦，不再是编辑状态', async () => {
+    const wrapper = makeHost(OPTIONS, true)
+    const input = wrapper.find('input')
+    const el = input.element as HTMLInputElement
+
+    await input.trigger('focus')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    await input.setValue('work')
+    await wrapper.vm.$nextTick()
+
+    await wrapper.findAll('[role="option"]')[0]!.trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    // 值要对：显示的是新选中的标签，不是刚才输入的关键词
+    expect(el.value).toBe('workshop — 嵌入式工作坊')
+    // 焦点要交出去：留着就会出现文本光标，看起来像还在编辑
+    expect(document.activeElement).not.toBe(el)
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('搜索模式下键盘选中后仍保持聚焦', async () => {
+    // 键盘用户选完多半要继续 Tab，焦点被夺走会让 Tab 从 body 重新开始
+    const wrapper = makeHost(OPTIONS, true)
+    const input = wrapper.find('input')
+    const el = input.element as HTMLInputElement
+
+    await input.trigger('focus')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    await input.setValue('hack')
+    await wrapper.vm.$nextTick()
+
+    await input.trigger('keydown', { key: 'Enter' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    expect(el.value).toBe('hackathon — 黑客松')
+    expect(document.activeElement).toBe(el)
+    wrapper.unmount()
+  })
+
+  it('按钮模式下鼠标选中后显示新标签', async () => {
+    const wrapper = makeHost(OPTIONS, false)
+    await wrapper.find('button.select__trigger').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    await wrapper.findAll('[role="option"]')[2]!.trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.select__value').text()).toBe('hackathon — 黑客松')
+    expect(wrapper.find('.select__value--empty').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('键盘选完后 Tab 走开不会被抢回焦点', async () => {
+    const wrapper = makeHost(OPTIONS, true)
+    const input = wrapper.find('input')
+
+    await input.trigger('focus')
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    await input.setValue('spring')
+    await wrapper.vm.$nextTick()
+    await input.trigger('keydown', { key: 'Enter' })
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    const outside = document.createElement('input')
+    document.body.appendChild(outside)
+    outside.focus()
+    await input.trigger('keydown', { key: 'Tab' })
+    await wrapper.vm.$nextTick()
+
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
     wrapper.unmount()
   })
 })
