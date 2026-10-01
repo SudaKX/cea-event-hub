@@ -142,6 +142,8 @@ def create_app() -> FastAPI:
             directory=settings.CONTENT_DIR,
             html=True,
             cors_origin=settings.CONTENT_CORS_ALLOW_ORIGIN,
+            sdk_path=settings.CONTENT_SDK_PATH,
+            inject_sdk=settings.CONTENT_SDK_INJECT,
         ),
         name="content",
     )

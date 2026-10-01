@@ -76,7 +76,9 @@ class TestStaticServing:
 
         response = client.get("/content/spring-2026/index.html")
         assert response.status_code == 200
-        assert response.text == "<h1>hi</h1>"
+        # 原内容原样保留；返回的 HTML 里还会多一行注入的桥接脚本，
+        # 因此这里断言"包含"而不是"逐字节相等"（见 test_content_inject.py）
+        assert "<h1>hi</h1>" in response.text
 
     def test_content_carries_wildcard_cors(self, client, test_db, content_root) -> None:
         """不透明源的沙箱活动页对同主机也算跨源，没有这个头它取不到自己的数据。"""

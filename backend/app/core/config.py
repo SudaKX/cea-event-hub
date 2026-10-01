@@ -129,6 +129,13 @@ class Settings(BaseSettings):
     # ---------- 内容缓存 ----------
     CONTENT_CORS_ALLOW_ORIGIN: str = "*"
 
+    # ---------- 活动页的桥接脚本注入 ----------
+    # 由内容服务端在返回 HTML 时插入，使活动页作者**不必记得写那一行**。
+    # 幂等：活动页自己引用了就不再注入（见 services/content_inject.py）。
+    # 关掉它就回到"必须显式引用"的旧行为。
+    CONTENT_SDK_INJECT: bool = True
+    CONTENT_SDK_PATH: str = "/sdk/v1/cea.js"
+
     @field_validator(
         "MAX_SUBMISSIONS_PER_EVENT_ANON",
         "MAX_SUBMISSIONS_PER_EVENT_AUTHED",

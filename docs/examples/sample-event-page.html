@@ -8,7 +8,10 @@
   活动页接入示例。
 
   三件必须记住的事：
-    1. 引入 SDK：<script src="/sdk/v1/cea.js"></script>
+    1. **不需要引入 SDK** —— 平台会在返回你的 HTML 时自动插入
+       <script src="/sdk/v1/cea.js" id="cea-sdk"></script>
+       本文件在下面仍然显式写了那一行，用来演示"自己写也可以"：托管层检测到
+       已有引用就不会重复注入。
     2. 不要试图 fetch('/api/...') —— 沙箱下这是被浏览器拦死的
     3. 不要在这个文件里放任何秘密：/content/** 是公开可读的
 
@@ -100,7 +103,7 @@
   <button type="submit" id="submit">提交报名</button>
 </form>
 
-<!-- 必须引入：没有它活动页既无法提交，也无法与宿主通讯 -->
+<!-- 可选：不写这一行平台也会自动注入。这里保留是为了演示显式引用同样有效 -->
 <script src="/sdk/v1/cea.js"></script>
 <script>
 (async () => {

@@ -2,11 +2,12 @@
 
 给活动页作者的说明。完整示例见 `docs/examples/sample-event-page.html`，可直接打包投放。
 
-## 三步接入
+## 两步接入
 
 ```html
-<!-- 1. 引入 SDK（必须，放在 </body> 前） -->
-<script src="/sdk/v1/cea.js"></script>
+<!-- 1. 不需要引入 SDK —— 平台会在返回你的 HTML 时自动插入这一行：
+     <script src="/sdk/v1/cea.js" id="cea-sdk"></script>
+     想自己显式写也完全可以；平台检测到已有引用就不会重复插入。 -->
 
 <script>
   // 2. 等宿主握手完成，拿到身份描述符
@@ -18,7 +19,14 @@
 </script>
 ```
 
-没有引入 SDK 时，宿主会在 5 秒后显示明确提示，指出缺哪一行 —— 而不是留一片空白。
+**SDK 是自动注入的。** 托管层返回 HTML 前检查：页面里已经有 `/sdk/v1/cea.js`
+或 `id="cea-sdk"` 的标签就原样返回，没有就在 `</head>` 前补一行。所以"忘了引入
+SDK"不再是可能犯的错误。
+
+注入的那一行带 `id="cea-sdk"`，你可以用 `document.getElementById('cea-sdk')`
+判断它是否就位。
+
+> 需要关掉注入时设 `CONTENT_SDK_INJECT=false`，即回到"必须显式引用"的行为。
 
 ## 可用方法
 
