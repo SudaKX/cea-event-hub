@@ -1,12 +1,13 @@
 <script setup lang="ts">
 /** 活动详情：编辑策略、投放内容、查看该活动的提交。 */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } from '@/api/events'
 import { deleteSubmission, listEventSubmissions, reviewSubmission } from '@/api/submissions'
 import { attachmentUrl } from '@/api/submissions'
+import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import type { ContentFile, EventAdmin, Submission } from '@/types/api'
 
@@ -24,11 +25,17 @@ const event = ref<EventAdmin | null>(null)
 const files = ref<ContentFile[]>([])
 const submissions = ref<Submission[]>([])
 const total = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
 const error = ref('')
 const notice = ref('')
 const loading = ref(true)
 const busy = ref(false)
 const archive = ref<File | null>(null)
+
+const pageCount = computed(() =>
+  Math.max(1, Math.ceil(total.value / Math.max(1, pageSize.value))),
+)
 
 const form = ref({
   title: '',
@@ -45,25 +52,76 @@ const quotaText = computed(() => {
   return `${quota.used} / ${quota.limit}`
 })
 
+/**
+ * 拉活动详情与内容，并**用返回值重置表单**。
+ *
+ * 只在"进页面 / 换活动 / 投放内容"时调用 —— 表单里可能有管理员正在敲的内容，
+ * 不能因为翻个页或者删掉一条垃圾提交就把它冲掉。
+ */
+async function loadDetail(): Promise<void> {
+  const [detail, content] = await Promise.all([
+    getAdminEvent(props.eventId),
+    listContent(props.eventId),
+  ])
+  event.value = detail
+  files.value = content.files
+  form.value = {
+    title: detail.title,
+    summary: detail.summary ?? '',
+    status: detail.status,
+    submission_requires_login: detail.submission_requires_login,
+    max_submissions: detail.max_submissions === null ? '' : String(detail.max_submissions),
+  }
+}
+
+/**
+ * 只拉一页提交。
+ *
+ * 翻页、审核都走这里，不碰表单也不重取内容。
+ */
+async function loadSubmissions(): Promise<void> {
+  const list = await listEventSubmissions(props.eventId, {
+    page: page.value,
+    page_size: pageSize.value,
+  })
+  submissions.value = list.submissions
+  total.value = list.total
+
+  // 删到当前页空了就退一页 —— 否则会停在一个已经不存在的页码上，看到一片空白
+  if (page.value > pageCount.value) {
+    page.value = pageCount.value
+    await loadSubmissions()
+  }
+}
+
+/** 删除会改变配额，但**不该重置表单** —— 所以只重取活动本身 */
+async function refreshQuota(): Promise<void> {
+  event.value = await getAdminEvent(props.eventId)
+}
+
+/**
+ * 翻页与改每页条数走**显式处理函数**而不是 watch。
+ *
+ * 因为 `loadSubmissions` 里有个"当前页越界就退一页"的自我修正，用 watch 的话那次
+ * 修正会再触发一次 watch，同一个动作发两次请求。
+ */
+function onPageChange(next: number): void {
+  page.value = next
+  void loadSubmissions()
+}
+
+function onPageSizeChange(next: number): void {
+  pageSize.value = next
+  // 每页条数变了必须回到第一页，否则会停在一个可能已不存在的页码上
+  page.value = 1
+  void loadSubmissions()
+}
+
 async function load(): Promise<void> {
   loading.value = true
   try {
-    const [detail, content, list] = await Promise.all([
-      getAdminEvent(props.eventId),
-      listContent(props.eventId),
-      listEventSubmissions(props.eventId, { page_size: 20 }),
-    ])
-    event.value = detail
-    files.value = content.files
-    submissions.value = list.submissions
-    total.value = list.total
-    form.value = {
-      title: detail.title,
-      summary: detail.summary ?? '',
-      status: detail.status,
-      submission_requires_login: detail.submission_requires_login,
-      max_submissions: detail.max_submissions === null ? '' : String(detail.max_submissions),
-    }
+    await loadDetail()
+    await loadSubmissions()
     error.value = ''
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '加载失败'
@@ -111,7 +169,8 @@ async function onDeploy(): Promise<void> {
 async function onReview(submission: Submission, status: string): Promise<void> {
   try {
     await reviewSubmission(submission.id, status)
-    await load()
+    // 只改了状态，重取这一页就够了
+    await loadSubmissions()
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '操作失败'
   }
@@ -121,7 +180,8 @@ async function onDeleteSubmission(submission: Submission): Promise<void> {
   if (!window.confirm('删除这条提交？它占用的名额会立即释放。')) return
   try {
     await deleteSubmission(submission.id)
-    await load()
+    // 配额变了要刷新活动，但表单不动 —— 管理员可能正在改它
+    await Promise.all([loadSubmissions(), refreshQuota()])
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '删除失败'
   }
@@ -143,6 +203,15 @@ function onFileChange(input: Event): void {
 }
 
 onMounted(load)
+
+// 路由参数变化时组件会被复用，不监听就会停在上一个活动的数据上（顺带把页码归位）
+watch(
+  () => props.eventId,
+  async () => {
+    page.value = 1
+    await load()
+  },
+)
 </script>
 
 <template>
@@ -226,7 +295,11 @@ onMounted(load)
 
       <!-- 提交 -->
       <div class="panel block">
-        <h2 class="block__title">提交<span class="dim"> · 共 {{ total }} 条</span></h2>
+        <!--
+          总数交给 Pager 显示，这里不重复一遍 —— 两个地方各显示一份数字，
+          迟早会出现对不上的时候。
+        -->
+        <h2 class="block__title">提交</h2>
 
         <p v-if="submissions.length === 0" class="empty">还没有提交。</p>
         <table v-else class="table">
@@ -293,6 +366,14 @@ onMounted(load)
             </tr>
           </tbody>
         </table>
+
+        <Pager
+          :page="page"
+          :page-size="pageSize"
+          :total="total"
+          @update:page="onPageChange"
+          @update:page-size="onPageSizeChange"
+        />
       </div>
     </template>
   </section>

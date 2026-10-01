@@ -17,6 +17,7 @@ import {
   listEventSubmissions,
   reviewSubmission,
 } from '@/api/submissions'
+import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import type { EventAdmin, Submission } from '@/types/api'
 
@@ -34,7 +35,7 @@ const eventId = ref('')
 const kind = ref('')
 const status = ref('')
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 
 const submissions = ref<Submission[]>([])
 const total = ref(0)
@@ -54,7 +55,9 @@ const kindOptions = computed<SelectOption[]>(() =>
     .map((value) => ({ value, label: value })),
 )
 
-const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+const pageCount = computed(() =>
+  Math.max(1, Math.ceil(total.value / Math.max(1, pageSize.value))),
+)
 
 async function loadEvents(): Promise<void> {
   try {
@@ -74,12 +77,18 @@ async function loadSubmissions(): Promise<void> {
       kind: kind.value || undefined,
       status: status.value || undefined,
       page: page.value,
-      page_size: pageSize,
+      page_size: pageSize.value,
     })
     submissions.value = result.submissions
     total.value = result.total
     selected.value = new Set()
     error.value = ''
+
+    // 删到当前页空了就退一页 —— 否则会停在一个已经不存在的页码上，看到一片空白
+    if (page.value > pageCount.value) {
+      page.value = pageCount.value
+      await loadSubmissions()
+    }
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '加载提交失败'
   } finally {
@@ -125,11 +134,29 @@ function toggle(id: number): void {
   selected.value = next
 }
 
+/**
+ * 翻页与改每页条数走**显式处理函数**而不是 watch。
+ *
+ * 因为 `loadSubmissions` 里有个"当前页越界就退一页"的自我修正，用 watch 的话那次
+ * 修正会再触发一次 watch，同一个动作发两次请求。
+ */
+function onPageChange(next: number): void {
+  page.value = next
+  void loadSubmissions()
+}
+
+function onPageSizeChange(next: number): void {
+  pageSize.value = next
+  // 每页条数变了必须回到第一页，否则会停在一个可能已不存在的页码上
+  page.value = 1
+  void loadSubmissions()
+}
+
+// 换活动或换筛选条件都要回到第一页，否则会停在一个新结果集里不存在的页码上
 watch([eventId, kind, status], () => {
   page.value = 1
   void loadSubmissions()
 })
-watch(page, () => void loadSubmissions())
 
 onMounted(async () => {
   await loadEvents()
@@ -271,19 +298,13 @@ onMounted(async () => {
         </tbody>
       </table>
 
-      <div v-if="pageCount > 1" class="pager">
-        <button class="btn btn--ghost btn--small" :disabled="page <= 1" @click="page -= 1">
-          上一页
-        </button>
-        <span class="num dim">{{ page }} / {{ pageCount }}</span>
-        <button
-          class="btn btn--ghost btn--small"
-          :disabled="page >= pageCount"
-          @click="page += 1"
-        >
-          下一页
-        </button>
-      </div>
+      <Pager
+        :page="page"
+        :page-size="pageSize"
+        :total="total"
+        @update:page="onPageChange"
+        @update:page-size="onPageSizeChange"
+      />
     </div>
 
     <p class="mute foot">
@@ -367,14 +388,6 @@ onMounted(async () => {
   display: flex;
   gap: 6px;
   white-space: nowrap;
-}
-
-.pager {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 14px;
 }
 
 .foot {
