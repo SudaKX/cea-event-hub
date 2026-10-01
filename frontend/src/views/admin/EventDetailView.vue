@@ -267,13 +267,25 @@ onMounted(load)
               <td><span class="tag" :class="`tag--${item.status}`">{{ item.status }}</span></td>
               <td class="num dim">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</td>
               <td class="actions">
-                <button class="btn btn--ghost btn--small" @click="onReview(item, 'accepted')">
+                <button
+                  class="btn btn--ghost btn--small"
+                  title="标记为通过。只改状态，不删数据、不释放名额。"
+                  @click="onReview(item, 'accepted')"
+                >
                   接受
                 </button>
-                <button class="btn btn--ghost btn--small" @click="onReview(item, 'rejected')">
+                <button
+                  class="btn btn--ghost btn--small"
+                  title="标记为不通过。提交仍会留在列表里，仍占用名额；要腾出名额请用「删除」。"
+                  @click="onReview(item, 'rejected')"
+                >
                   拒绝
                 </button>
-                <button class="btn btn--danger btn--small" @click="onDeleteSubmission(item)">
+                <button
+                  class="btn btn--danger btn--small"
+                  title="删除该条提交及其附件，并释放一个名额。不可撤销。"
+                  @click="onDeleteSubmission(item)"
+                >
                   删除
                 </button>
               </td>

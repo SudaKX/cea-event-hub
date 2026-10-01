@@ -133,6 +133,30 @@ onMounted(async () => {
       </button>
     </header>
 
+    <!--
+      这三个动作容易被当成同一件事，实际差别很大，尤其"拒绝"并不释放名额 ——
+      满额活动上如果只拒绝不删除，活动仍然是满的。
+    -->
+    <dl class="legend panel">
+      <div class="legend__item">
+        <dt class="mono">接受 / 拒绝</dt>
+        <dd>只改审核状态，供你自己归档。<strong>不删除数据，也不释放名额。</strong></dd>
+      </div>
+      <div class="legend__item">
+        <dt class="mono">删除</dt>
+        <dd>真正移除该条提交及其附件，并在同一事务里<strong>释放一个名额</strong>。</dd>
+      </div>
+      <div class="legend__item">
+        <dt class="mono">状态</dt>
+        <dd>
+          <span class="tag">received</span> 新提交的初始状态 ·
+          <span class="tag tag--reviewing">reviewing</span> 正在看 ·
+          <span class="tag tag--accepted">accepted</span> 通过 ·
+          <span class="tag tag--rejected">rejected</span> 不通过
+        </dd>
+      </div>
+    </dl>
+
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
 
     <div class="panel filters">
@@ -213,13 +237,27 @@ onMounted(async () => {
             <td><span class="tag" :class="`tag--${item.status}`">{{ item.status }}</span></td>
             <td class="num dim">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</td>
             <td class="actions">
-              <button class="btn btn--ghost btn--small" @click="onReview(item, 'accepted')">
+              <button
+                class="btn btn--ghost btn--small"
+                title="标记为通过。只改状态，不删数据、不释放名额。"
+                @click="onReview(item, 'accepted')"
+              >
                 接受
               </button>
-              <button class="btn btn--ghost btn--small" @click="onReview(item, 'rejected')">
+              <button
+                class="btn btn--ghost btn--small"
+                title="标记为不通过。提交仍会留在列表里，仍占用名额；要腾出名额请用「删除」。"
+                @click="onReview(item, 'rejected')"
+              >
                 拒绝
               </button>
-              <button class="btn btn--danger btn--small" @click="onDelete(item)">删除</button>
+              <button
+                class="btn btn--danger btn--small"
+                title="删除该条提交及其附件，并释放一个名额。不可撤销。"
+                @click="onDelete(item)"
+              >
+                删除
+              </button>
             </td>
           </tr>
         </tbody>
@@ -268,6 +306,40 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 14px;
+}
+
+.legend {
+  margin: 0;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.legend__item {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.legend__item dt {
+  flex: none;
+  width: 96px;
+  color: var(--mute);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+}
+
+.legend__item dd {
+  margin: 0;
+  color: var(--mute);
+  line-height: 1.7;
+}
+
+.legend__item strong {
+  color: var(--bone);
+  font-weight: 600;
 }
 
 .payload {

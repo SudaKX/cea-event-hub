@@ -35,8 +35,6 @@ const event = ref<EventPublic | null>(null)
 const loading = ref(true)
 const error = ref('')
 const diagnostic = ref<'none' | 'missing-sdk' | 'version-mismatch' | 'missing-content'>('none')
-const frameHeight = ref(640)
-const pageTitle = ref('')
 
 let host: BridgeHost | null = null
 
@@ -98,11 +96,13 @@ function buildHost(): void {
     theme,
     onNavigate: (to) => void router.push(to),
     onTitle: (title) => {
-      pageTitle.value = title
+      // 没有可见的标题栏了，标题落到浏览器标签上
+      if (title) document.title = title
     },
-    onResize: (height) => {
-      frameHeight.value = Math.max(320, Math.min(height, 4000))
-    },
+    // 全屏 iframe 下高度由视口决定，活动页自己内部滚动。
+    // 仍然接受 event:resize（旧活动页可能还在发），但不据此改变高度 ——
+    // 否则内容一长就会把 iframe 撑出视口，出现双层滚动条。
+    onResize: () => {},
     onToast: (payload) => {
       // 活动页的提示统一走宿主，避免在沙箱里用 alert
       console.info('[event toast]', payload.level ?? 'info', payload.message)
@@ -130,7 +130,7 @@ async function load(): Promise<void> {
   diagnostic.value = 'none'
   try {
     event.value = await getPublicEvent(props.eventId)
-    pageTitle.value = event.value.title
+    document.title = event.value.title
 
     // 活动存在但内容还没投放：直接说清楚，而不是显示一个 404 的 iframe
     if (!(await contentEntryExists(frameSrc.value))) {
@@ -175,24 +175,11 @@ watch(
 
 <template>
   <div class="event">
-    <header class="event__bar">
-      <RouterLink class="event__brand mono" to="/admin">
-        CEA<span class="dim">/</span><em>{{ eventId }}</em>
-      </RouterLink>
-
-      <h1 class="event__title">{{ pageTitle || event?.title || '' }}</h1>
-
-      <div class="event__meta">
-        <span v-if="event" class="tag" :class="event.submission_requires_login ? 'tag--live' : ''">
-          {{ event.submission_requires_login ? '需登录' : '可匿名' }}
-        </span>
-        <span v-if="auth.isLoggedIn" class="mono dim">{{ auth.user?.display_name }}</span>
-        <RouterLink v-else class="mono" :to="{ name: 'login', query: { redirect: `/${eventId}` } }">
-          登录
-        </RouterLink>
-      </div>
-    </header>
-
+    <!--
+      刻意没有顶部栏：活动页就是活动自己的页面，宿主不该在它上面压一条自己的
+      chrome。活动标识、登录态这些信息由活动页自己经 CEA.identity() 取用；
+      标题落到浏览器标签（document.title）。
+    -->
     <p v-if="error" class="alert event__alert" role="alert">{{ error }}</p>
     <p v-else-if="loading" class="empty">加载中…</p>
 
@@ -232,8 +219,10 @@ watch(
     </div>
 
     <!--
-      活动内容：沙箱 iframe，src 指向内容 URL。
+      活动内容：沙箱 iframe，src 指向内容 URL，占满整个视口。
       sandbox 属性由 SANDBOX_TOKENS 绑定，**不含 allow-same-origin**。
+      高度交给 CSS（100%），不再由 event:resize 驱动 —— 全屏下内容自己滚动，
+      若还按内容高度撑开 iframe，长页面会把外层也撑出滚动条，变成双层滚动。
     -->
     <iframe
       v-if="event && diagnostic !== 'missing-content'"
@@ -241,7 +230,6 @@ watch(
       class="event__frame"
       :src="frameSrc"
       :sandbox="SANDBOX_TOKENS.join(' ')"
-      :style="{ height: `${frameHeight}px` }"
       title="活动内容"
       referrerpolicy="no-referrer"
       @load="onIframeLoad"
@@ -250,48 +238,13 @@ watch(
 </template>
 
 <style scoped>
+/* 占满视口。用 dvh 而不是 vh：移动端浏览器地址栏收起/展开时 vh 不变，
+   会让底部被裁掉一截。dvh 跟随实际可视高度。 */
 .event {
-  min-height: 100%;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
-}
-
-.event__bar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
-}
-
-.event__brand {
-  font-size: 13px;
-  letter-spacing: 0.06em;
-  color: var(--bone);
-  text-decoration: none;
-}
-
-.event__brand em {
-  font-style: normal;
-  color: var(--red-hi);
-}
-
-.event__title {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
-  font-weight: 600;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.event__meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
 }
 
 .event__alert {
@@ -301,6 +254,7 @@ watch(
 .event__frame {
   flex: 1;
   width: 100%;
+  min-height: 0; /* flex 子项默认 min-height:auto，会让 iframe 撑破容器 */
   border: 0;
   background: var(--bg);
   display: block;
