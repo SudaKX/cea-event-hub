@@ -57,18 +57,27 @@ describe('SDK 产物', () => {
       'toast',
       'navigate',
       'setTitle',
-      'resize',
     ]) {
       expect(typeof cea[method], method).toBe('function')
     }
   })
 
-  it('暴露了草稿的三个方法', () => {
-    const cea = (globalThis as unknown as { CEA: { draft: Record<string, unknown> } }).CEA
-    expect(cea.draft).toBeDefined()
-    for (const method of ['save', 'load', 'clear']) {
-      expect(typeof cea.draft[method], method).toBe('function')
+  it('不再暴露 resize —— 全屏后它没有实际作用', () => {
+    const cea = (globalThis as unknown as { CEA: Record<string, unknown> }).CEA
+    expect(cea.resize).toBeUndefined()
+  })
+
+  it('暴露了本地储存的四个方法', () => {
+    const cea = (globalThis as unknown as { CEA: { storage: Record<string, unknown> } }).CEA
+    expect(cea.storage).toBeDefined()
+    for (const method of ['save', 'load', 'remove', 'clear']) {
+      expect(typeof cea.storage[method], method).toBe('function')
     }
+  })
+
+  it('不再暴露 draft —— 已升级为通用的 storage', () => {
+    const cea = (globalThis as unknown as { CEA: Record<string, unknown> }).CEA
+    expect(cea.draft).toBeUndefined()
   })
 
   it('产物没有创建会覆盖 window.CEA 的全局变量', () => {

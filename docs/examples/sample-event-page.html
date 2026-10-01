@@ -119,6 +119,7 @@
   const who = document.getElementById('who');
   const quota = document.getElementById('quota');
   const submitButton = document.getElementById('submit');
+  // 本地储存的 key：只是本活动内的一段命名空间，宿主会加上自己的前缀
   const FORM_KEY = 'signup';
 
   function show(text, kind) {
@@ -152,7 +153,9 @@
   }
 
   // ---- 草稿：沙箱里没有 localStorage，由宿主代存 ----
-  const draft = await CEA.draft.load(FORM_KEY);
+  // key 只是本活动内的一段命名空间；真正的 localStorage key 由宿主拼成，
+  // 所以活动无法指到别的活动或宿主自己的键。
+  const draft = await CEA.storage.load(FORM_KEY);
   if (draft) {
     for (const [key, value] of Object.entries(draft)) {
       const field = form.elements[key];
@@ -166,14 +169,14 @@
     for (const field of form.elements) {
       if (field.name && field.type !== 'file') snapshot[field.name] = field.value;
     }
-    // 每次输入都存一次；失败也不影响填写（草稿只是便利功能）
-    CEA.draft.save(snapshot, FORM_KEY).catch(() => {});
+    // 每次输入都存一次；失败也不影响填写（草稿只是便利功能）。
+    // 超限会抛 storage_too_large，这里刻意吞掉 —— 草稿存不下不该挡住提交。
+    CEA.storage.save(FORM_KEY, snapshot).catch(() => {});
   });
 
   // 不需要通知宿主内容高度：活动页占满整个视口，自己负责滚动。
-  // （早期版本需要调 CEA.resize()，那是"iframe 按内容高度撑开"的旧版式；
-  //   那种版式会让长页面产生双层滚动条，已经去掉了。CEA.resize() 现在
-  //   是空操作，仅为兼容保留。）
+  // （早期版本有 CEA.resize()，那是"iframe 按内容高度撑开"的旧版式；那种版式
+  //   会让长页面产生双层滚动条。全屏改造后它已从 SDK 中移除。）
 
   // ---- 提交 ----
   form.addEventListener('submit', async (event_) => {
@@ -216,7 +219,7 @@
       }
 
       form.reset();
-      await CEA.draft.clear(FORM_KEY);
+      await CEA.storage.remove(FORM_KEY);
     } catch (error) {
       // 活动页只需判断 code，不必解析 HTTP 状态码
       switch (error.code) {

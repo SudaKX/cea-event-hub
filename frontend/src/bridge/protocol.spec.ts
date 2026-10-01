@@ -7,6 +7,7 @@ import {
   ALLOWED_OPS,
   BRIDGE_ERROR,
   BRIDGE_OP,
+  IFRAME_MESSAGE,
   PROTOCOL_VERSION,
   isCompatible,
   isEnvelope,
@@ -66,11 +67,19 @@ describe('操作白名单', () => {
     }
   })
 
-  it('包含提交、读取与草稿操作', () => {
+  it('包含提交、读取与本地储存操作', () => {
     expect(ALLOWED_OPS).toContain(BRIDGE_OP.FORM_SUBMIT)
     expect(ALLOWED_OPS).toContain(BRIDGE_OP.FORM_SUBMIT_FILES)
     expect(ALLOWED_OPS).toContain(BRIDGE_OP.EVENT_INFO)
-    expect(ALLOWED_OPS).toContain(BRIDGE_OP.DRAFT_SAVE)
+    expect(ALLOWED_OPS).toContain(BRIDGE_OP.STORAGE_SAVE)
+    expect(ALLOWED_OPS).toContain(BRIDGE_OP.STORAGE_LOAD)
+    expect(ALLOWED_OPS).toContain(BRIDGE_OP.STORAGE_REMOVE)
+    expect(ALLOWED_OPS).toContain(BRIDGE_OP.STORAGE_CLEAR)
+  })
+
+  it('不再暴露 resize —— 全屏后它没有实际作用', () => {
+    expect(Object.keys(IFRAME_MESSAGE)).not.toContain('RESIZE')
+    expect(Object.values(IFRAME_MESSAGE)).not.toContain('event:resize')
   })
 
   it('不包含任何管理类操作', () => {

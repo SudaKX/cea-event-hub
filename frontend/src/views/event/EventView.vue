@@ -99,10 +99,6 @@ function buildHost(): void {
       // 没有可见的标题栏了，标题落到浏览器标签上
       if (title) document.title = title
     },
-    // 全屏 iframe 下高度由视口决定，活动页自己内部滚动。
-    // 仍然接受 event:resize（旧活动页可能还在发），但不据此改变高度 ——
-    // 否则内容一长就会把 iframe 撑出视口，出现双层滚动条。
-    onResize: () => {},
     onToast: (payload) => {
       // 活动页的提示统一走宿主，避免在沙箱里用 alert
       console.info('[event toast]', payload.level ?? 'info', payload.message)

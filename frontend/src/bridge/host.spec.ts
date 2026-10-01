@@ -56,7 +56,6 @@ interface Harness {
   sent: Array<{ type: string; payload: unknown; id?: string }>
   onBridgeMissing: ReturnType<typeof vi.fn>
   onVersionMismatch: ReturnType<typeof vi.fn>
-  onResize: ReturnType<typeof vi.fn>
   onNavigate: ReturnType<typeof vi.fn>
 }
 
@@ -76,7 +75,6 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
 
   const onBridgeMissing = vi.fn()
   const onVersionMismatch = vi.fn()
-  const onResize = vi.fn()
   const onNavigate = vi.fn()
 
   const host = new BridgeHost({
@@ -95,13 +93,12 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
     theme: () => ({ '--bg': '#0b0b0d' }),
     onBridgeMissing,
     onVersionMismatch,
-    onResize,
     onNavigate,
     requestTimeoutMs: 50,
     readyTimeoutMs: 20,
   })
 
-  return { host, iframe, sent, onBridgeMissing, onVersionMismatch, onResize, onNavigate }
+  return { host, iframe, sent, onBridgeMissing, onVersionMismatch, onNavigate }
 }
 
 function rpc(host: Harness, op: string, args: Record<string, unknown> = {}, id = 'r1'): void {
@@ -466,19 +463,165 @@ describe('超时与清理（任务 13.7）', () => {
   })
 })
 
+describe('本地储存', () => {
+  let harness: Harness
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    window.localStorage.clear()
+    harness = makeHost()
+    harness.host.start()
+  })
+
+  const result = (id = 'r1') =>
+    harness.sent.find((m) => m.type === HOST_MESSAGE.RESULT && m.id === id)
+
+  it('写入的 localStorage key 由宿主拼成，活动无法指定完整键', async () => {
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'form', value: { a: 1 } })
+    await flush()
+
+    // 真正落盘的是宿主自己的命名空间，前缀里带活动标识
+    const keys = Object.keys(window.localStorage)
+    expect(keys).toEqual(['cea.storage:spring-2026:form'])
+    // 活动给的那个 key 单独不是有效键，取不到东西
+    expect(window.localStorage.getItem('form')).toBeNull()
+  })
+
+  it('活动拿不到别的活动的数据', async () => {
+    window.localStorage.setItem('cea.storage:other-event:form', '{"secret":1}')
+
+    rpc(harness, BRIDGE_OP.STORAGE_LOAD, { key: 'form' })
+    await flush()
+
+    // 本活动没有写过 form，应当是 null，而不是读到 other-event 的
+    expect(result()?.payload).toMatchObject({ ok: true, data: null })
+  })
+
+  it('活动碰不到宿主自己的键', async () => {
+    window.localStorage.setItem('cea.token', 'host-only')
+
+    // 用尽各种想越界的写法，都应当落回自己的命名空间
+    for (const evil of ['../cea.token', 'cea.token', ':spring-2026:x']) {
+      rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: evil, value: 1 }, 'rx')
+      await flush()
+      expect(result('rx')?.payload).toMatchObject({
+        ok: false,
+        error: { code: BRIDGE_ERROR.STORAGE_KEY_INVALID },
+      })
+    }
+    expect(window.localStorage.getItem('cea.token')).toBe('host-only')
+  })
+
+  it('key 不合规时报错而不是回落到默认槽位', async () => {
+    // 回落会让 'Form' 和 'form' 之类撞在一起互相覆盖，是静默的数据损坏
+    for (const bad of ['', 'Form', 'has space', 'a'.repeat(65), '-lead', 42, null]) {
+      rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: bad, value: 1 }, 'rb')
+      await flush()
+      expect(result('rb')?.payload).toMatchObject({
+        ok: false,
+        error: { code: BRIDGE_ERROR.STORAGE_KEY_INVALID },
+      })
+    }
+    expect(Object.keys(window.localStorage)).toEqual([])
+  })
+
+  it('存进去能原样读回来', async () => {
+    const value = { name: '张三', nested: { list: [1, 2, 3] } }
+
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'form', value })
+    await flush()
+    rpc(harness, BRIDGE_OP.STORAGE_LOAD, { key: 'form' }, 'r2')
+    await flush()
+
+    expect(result('r2')?.payload).toMatchObject({ ok: true, data: value })
+  })
+
+  it('remove 只删掉那一条', async () => {
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'a', value: 1 })
+    await flush()
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'b', value: 2 }, 'r2')
+    await flush()
+    rpc(harness, BRIDGE_OP.STORAGE_REMOVE, { key: 'a' }, 'r3')
+    await flush()
+
+    expect(Object.keys(window.localStorage)).toEqual(['cea.storage:spring-2026:b'])
+  })
+
+  it('clear 只清本活动的数据', async () => {
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'a', value: 1 })
+    await flush()
+    window.localStorage.setItem('cea.storage:other-event:a', '1')
+
+    rpc(harness, BRIDGE_OP.STORAGE_CLEAR, {}, 'r2')
+    await flush()
+
+    expect(Object.keys(window.localStorage)).toEqual(['cea.storage:other-event:a'])
+  })
+
+  it('总量超上限时拒绝写入，而不是截断', async () => {
+    // 4096 是**整个活动**的预算，不是单条的
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'a', value: 'x'.repeat(3000) })
+    await flush()
+    expect(result()?.payload).toMatchObject({ ok: true })
+
+    // 再加 2000 会让总量超过 4096
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'b', value: 'y'.repeat(2000) }, 'r2')
+    await flush()
+    expect(result('r2')?.payload).toMatchObject({
+      ok: false,
+      error: { code: BRIDGE_ERROR.STORAGE_TOO_LARGE },
+    })
+
+    // 被拒的那条不该留下半个值
+    expect(window.localStorage.getItem('cea.storage:spring-2026:b')).toBeNull()
+  })
+
+  it('覆盖同一个 key 不会把自己的旧值算进预算', async () => {
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'a', value: 'x'.repeat(4000) })
+    await flush()
+
+    // 同一条重写，预算应当按"替换"算，而不是"叠加"
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'a', value: 'x'.repeat(4000) }, 'r2')
+    await flush()
+    expect(result('r2')?.payload).toMatchObject({ ok: true })
+  })
+
+  it('无法序列化的值报 validation_failed', async () => {
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'a', value: circular })
+    await flush()
+
+    expect(result()?.payload).toMatchObject({
+      ok: false,
+      error: { code: BRIDGE_ERROR.VALIDATION_FAILED },
+    })
+  })
+
+  it('存的是 JSON 而不是字符串本身', async () => {
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'a', value: { n: 1 } })
+    await flush()
+
+    expect(window.localStorage.getItem('cea.storage:spring-2026:a')).toBe('{"n":1}')
+  })
+})
+
 describe('活动页请求的其它消息', () => {
-  it('高度变化转交宿主', () => {
+  it('忽略已废弃的 event:resize，而不是崩掉', () => {
+    // 协议可能比宿主新，也可能有旧活动页还在发这条消息。
+    // 全屏版面下它没有意义，但收到它必须无害。
     vi.clearAllMocks()
     const harness = makeHost()
     harness.host.start()
 
-    postFrom(harness.iframe.contentWindow, {
-      v: PROTOCOL_VERSION,
-      type: IFRAME_MESSAGE.RESIZE,
-      payload: { height: 1234 },
-    })
-
-    expect(harness.onResize).toHaveBeenCalledWith(1234)
+    expect(() =>
+      postFrom(harness.iframe.contentWindow, {
+        v: PROTOCOL_VERSION,
+        type: 'event:resize',
+        payload: { height: 1234 },
+      }),
+    ).not.toThrow()
   })
 
   it('只接受站内导航目标', () => {

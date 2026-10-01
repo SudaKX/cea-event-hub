@@ -73,12 +73,27 @@ export interface CeaApi {
   toast(message: string, level?: 'info' | 'error'): void
   navigate(to: string): void
   setTitle(title: string): void
-  /** 内容高度变化时调用，让宿主调整 iframe 高度 */
-  resize(): void
-  draft: {
-    save(value: unknown, formKey?: string): Promise<void>
-    load<T = unknown>(formKey?: string): Promise<T | null>
-    clear(formKey?: string): Promise<void>
+  /**
+   * 本地储存。宿主存在自己的 localStorage 里（活动页在不透明源下没有本地存储），
+   * 按活动隔离，**不落后端**。
+   *
+   * **key 的所有权在宿主**：这里传的 `key` 只是本活动内的一段命名空间，宿主会
+   * 把它和活动标识拼成真正的 localStorage key。所以活动既碰不到别的活动的数据，
+   * 也碰不到宿主自己的键。
+   *
+   * 约束：
+   * - `key` 只能是 1–64 位小写字母、数字、`-`、`_`，以字母或数字开头。
+   *   不合规会抛 `storage_key_invalid`（**不回落** —— 回落会让两个槽位撞在一起
+   *   互相覆盖）
+   * - 本活动所有数据加起来不能超过 `STORAGE_MAX_LENGTH`（4096 字符，按 JSON
+   *   序列化后计算），超出抛 `storage_too_large`。宿主**不截断**。
+   */
+  storage: {
+    save(key: string, value: unknown): Promise<void>
+    load<T = unknown>(key: string): Promise<T | null>
+    remove(key: string): Promise<void>
+    /** 清空**本活动**的全部本地数据 */
+    clear(): Promise<void>
   }
 }
 
@@ -90,7 +105,6 @@ interface Pending {
 }
 
 const READY_TIMEOUT_MS = 10_000
-const DEFAULT_FORM_KEY = 'default'
 
 class Bridge {
   private readonly pending = new Map<string, Pending>()
@@ -307,26 +321,18 @@ const api: CeaApi = {
     )
   },
 
-  resize() {
-    const height = Math.max(
-      document.documentElement.scrollHeight,
-      document.body?.scrollHeight ?? 0,
-    )
-    window.parent.postMessage(
-      { v: PROTOCOL_VERSION, type: IFRAME_MESSAGE.RESIZE, payload: { height } },
-      '*',
-    )
-  },
-
-  draft: {
-    async save(value: unknown, formKey = DEFAULT_FORM_KEY) {
-      await bridge.call('draft.save', { formKey, value })
+  storage: {
+    async save(key: string, value: unknown) {
+      await bridge.call('storage.save', { key, value })
     },
-    async load<T = unknown>(formKey = DEFAULT_FORM_KEY) {
-      return (await bridge.call('draft.load', { formKey })) as T | null
+    async load<T = unknown>(key: string) {
+      return (await bridge.call('storage.load', { key })) as T | null
     },
-    async clear(formKey = DEFAULT_FORM_KEY) {
-      await bridge.call('draft.clear', { formKey })
+    async remove(key: string) {
+      await bridge.call('storage.remove', { key })
+    },
+    async clear() {
+      await bridge.call('storage.clear', {})
     },
   },
 }

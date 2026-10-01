@@ -54,9 +54,23 @@ describe('沙箱令牌集合', () => {
 })
 
 describe('活动页指南与实现一致', () => {
-  it('指南明确说明不能使用本地存储', () => {
+  it('指南明确说明不能使用本地存储，并给出替代', () => {
     expect(guide).toContain('localStorage')
-    expect(guide).toContain('CEA.draft')
+    expect(guide).toContain('CEA.storage')
+  })
+
+  it('指南说明储存的 key 由宿主构造', () => {
+    // 这是"活动不能自由指定 localStorage key"那条约束的文档落点
+    expect(guide).toMatch(/key 的所有权在宿主|宿主拼成/)
+  })
+
+  it('指南给出储存容量上限', () => {
+    expect(guide).toContain('4096')
+  })
+
+  it('指南把 CEA.resize 标注为已移除，而不是当成可用方法', () => {
+    // 它出现在文档里是应该的 —— 但要明确说"没有了"，否则老作者会继续调
+    expect(guide).toMatch(/CEA\.resize\(\)[\s\S]{0,40}已移除/)
   })
 
   it('指南明确说明不能直接调用 /api', () => {

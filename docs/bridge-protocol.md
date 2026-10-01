@@ -46,7 +46,7 @@ sandbox="allow-scripts allow-forms allow-modals allow-popups"
 
 | 损失 | 替代 |
 |---|---|
-| `localStorage` / `sessionStorage` 抛错 | `CEA.draft.save/load/clear`（宿主按活动代存，不落后端） |
+| `localStorage` / `sessionStorage` 抛错 | `CEA.storage.*`（宿主按活动代存，键由宿主拼成，不落后端） |
 | `document.cookie` 不可用 | 不需要 —— 活动页本就不该持有凭据 |
 | `history.pushState` 抛 SecurityError | 页内多步流程用 hash 路由，或 `CEA.navigate()` |
 | `alert` / `confirm` 需 `allow-modals` | `CEA.toast()`（主题统一） |
@@ -122,13 +122,23 @@ Cookie 处在完全不同安全等级的原因。
 | `me.submissions` | — | `GET /me/submissions` |
 | `form.submit` | `{payload, kind?, idempotencyKey?}` | `POST .../submissions` |
 | `form.submitFiles` | `{payload, files, kind?, idempotencyKey?}` | `POST .../submissions:files` |
-| `draft.save` | `{formKey, value}` | 宿主 sessionStorage |
-| `draft.load` | `{formKey}` | 同上 |
-| `draft.clear` | `{formKey}` | 同上 |
+| `storage.save` | `{key, value}` | 宿主 localStorage，键为 `cea.storage:{eventId}:{key}` |
+| `storage.load` | `{key}` | 同上 |
+| `storage.remove` | `{key}` | 同上 |
+| `storage.clear` | — | 清空本活动的全部键 |
 
 **铁律：活动标识一律由宿主从自身路由取，绝不采信活动页传值。** 否则活动页能借宿主
 会话操作别的活动的数据。测试对此有专门断言：即使参数里带了 `event_id`，宿主仍用
 自己的。
+
+**储存的 key 所有权同样在宿主。** 活动传的 `key` 只是一个命名空间片段，宿主把它和
+活动标识拼成真正的 localStorage 键。活动因此无法指到别的活动，也无法触碰宿主自己
+的键。片段形态不合规时返回 `storage_key_invalid`，**不回落** —— 回落会让两个不同
+的槽位撞在一起互相覆盖。
+
+本活动所有储存数据的总量上限是 `STORAGE_MAX_LENGTH`（4096 字符，按 JSON 序列化
+后计算），超出返回 `storage_too_large`，**不截断**。按活动封总量是因为 localStorage
+是同源共享资源：一个活动页写爆它，同源下所有页面都会一起失败。
 
 白名单外的操作返回 `unsupported_op`，且**不发出任何网络请求**。
 
@@ -154,6 +164,8 @@ Cookie 处在完全不同安全等级的原因。
 | `rate_limited` | 触发限流 | 提示稍后重试（**唯一值得重试的**） |
 | `validation_failed` | 内容不合规 | 用 `fields` 标注到对应输入框 |
 | `payload_too_large` | 超出体积上限 | 提示压缩或减少文件 |
+| `storage_too_large` | 本地储存总量超 4096 字符 | 精简要存的内容；草稿类可以忽略这个错误 |
+| `storage_key_invalid` | 储存 key 不合规 | 这是活动页的 bug，改 key |
 | `unsupported_op` | 操作不在白名单 | 这是活动页的 bug |
 | `timeout` | 宿主等待超时 | 提示重试 |
 | `cancelled` | 请求被取消或 iframe 重载 | 忽略 |
@@ -164,8 +176,7 @@ Cookie 处在完全不同安全等级的原因。
 
 | 方向 | type | 说明 |
 |---|---|---|
-| 活动页 → 宿主 | `event:resize` | `{height}`。**宿主已忽略**：活动页占满视口、自己滚动，按内容高度撑开 iframe 会让长页面产生双层滚动条。消息仍然接受，旧活动页调用 `CEA.resize()` 不会报错 |
-| | `event:navigate` | `{to}`，**只接受站内路径**，外部地址被忽略 |
+| 活动页 → 宿主 | `event:navigate` | `{to}`，**只接受站内路径**，外部地址被忽略 |
 | | `event:title` | `{title}`，写入 `document.title` |
 | | `event:toast` | `{level, message}` |
 | | `event:error` | `{message}` |

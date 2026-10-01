@@ -20,6 +20,8 @@ import {
   HOST_MESSAGE,
   IFRAME_MESSAGE,
   PROTOCOL_VERSION,
+  STORAGE_KEY_PATTERN,
+  STORAGE_MAX_LENGTH,
   isCompatible,
   isEnvelope,
   type BridgeErrorCode,
@@ -42,7 +44,6 @@ export interface BridgeHostOptions {
   onNavigate?: (to: string) => void
   onToast?: (payload: { level?: string; message: string }) => void
   onTitle?: (title: string) => void
-  onResize?: (height: number) => void
   /** 约定时间内没收到就绪消息时触发，用于显示"缺少桥接脚本"诊断 */
   onBridgeMissing?: () => void
   onVersionMismatch?: (declared: number) => void
@@ -158,9 +159,6 @@ export class BridgeHost {
       case IFRAME_MESSAGE.READY:
         this.handleReady(message)
         break
-      case IFRAME_MESSAGE.RESIZE:
-        this.handleResize(message)
-        break
       case IFRAME_MESSAGE.NAVIGATE:
         this.handleNavigate(message)
         break
@@ -198,11 +196,6 @@ export class BridgeHost {
     this.handshakeDone = true
     // 幂等：重复就绪或 iframe 重载后重复下发都不会产生副作用
     this.sendInit()
-  }
-
-  private handleResize(message: Envelope): void {
-    const height = (message.payload as { height?: number } | undefined)?.height
-    if (typeof height === 'number' && height > 0) this.options.onResize?.(height)
   }
 
   private handleNavigate(message: Envelope): void {
@@ -298,17 +291,23 @@ export class BridgeHost {
       case BRIDGE_OP.ME_SUBMISSIONS:
         return mySubmissions(eventId)
 
-      case BRIDGE_OP.DRAFT_SAVE: {
-        draftStore.save(eventId, asFormKey(args.formKey), args.value)
+      case BRIDGE_OP.STORAGE_SAVE: {
+        localStore.save(eventId, asStorageSlot(args.key), args.value)
         return { ok: true }
       }
 
-      case BRIDGE_OP.DRAFT_LOAD:
-        return draftStore.load(eventId, asFormKey(args.formKey))
+      case BRIDGE_OP.STORAGE_LOAD:
+        return localStore.load(eventId, asStorageSlot(args.key))
 
-      case BRIDGE_OP.DRAFT_CLEAR:
-        draftStore.clear(eventId, asFormKey(args.formKey))
+      case BRIDGE_OP.STORAGE_REMOVE: {
+        localStore.remove(eventId, asStorageSlot(args.key))
         return { ok: true }
+      }
+
+      case BRIDGE_OP.STORAGE_CLEAR: {
+        localStore.clear(eventId)
+        return { ok: true }
+      }
 
       case BRIDGE_OP.FORM_SUBMIT:
       case BRIDGE_OP.FORM_SUBMIT_FILES: {
@@ -454,39 +453,148 @@ function asFileList(value: unknown): File[] {
   return value.filter((item): item is File => item instanceof File)
 }
 
-/** 草稿的键由活动页给出，但只作为**同一活动内**的命名空间，不影响路径。 */
-function asFormKey(value: unknown): string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 64
-    ? value
-    : 'default'
+/**
+ * 校验活动给的 key 片段。
+ *
+ * **不合规时抛错，不回落。** 回落成 `default` 会让两个本来不同的槽位撞在一起、
+ * 互相覆盖数据 —— 那是静默的数据损坏。报错至少能让活动页作者立刻发现。
+ *
+ * 校验通过也不代表活动可以自由指定 key：真正写进 localStorage 的键仍由宿主用
+ * 「活动标识 + 这个片段」拼成（见 `localStore.key`）。
+ */
+function asStorageSlot(value: unknown): string {
+  if (typeof value !== 'string' || !STORAGE_KEY_PATTERN.test(value)) {
+    throw new BridgeError(
+      BRIDGE_ERROR.STORAGE_KEY_INVALID,
+      '储存 key 只能是 1–64 位小写字母、数字、- 或 _，且以字母或数字开头',
+    )
+  }
+  return value
 }
 
-/** 草稿存储：活动页没有本地存储，由宿主按活动代存（不落后端）。 */
-export const draftStore = {
-  key(eventId: string, formKey: string): string {
-    return `cea.draft:${eventId}:${formKey}`
+/**
+ * 本地储存：活动页没有自己的 localStorage，由宿主代存。
+ *
+ * ## key 的所有权在宿主
+ *
+ * 活动只能给一个**命名空间片段**，真正的 localStorage key 由宿主拼出来：
+ *
+ * ```
+ * cea.storage:{活动标识}:{片段}
+ *              ^^^^^^^^^^  来自宿主自身路由，活动无法伪造
+ * ```
+ *
+ * 因此活动既碰不到别的活动的数据，也碰不到宿主自己的键。片段本身还要过一道
+ * 形态校验 —— **不合规就报错，不回落**：回落成默认值会让两个本来不同的槽位撞在
+ * 一起互相覆盖，那是静默的数据损坏。
+ *
+ * ## 三点设计取舍
+ *
+ * 1. **用 localStorage 而不是 sessionStorage。** 这东西存在的理由就是"填到一半
+ *    关掉页面还能接着填"，而 sessionStorage 随标签页关闭即失，正好把这个理由
+ *    消掉。
+ *
+ * 2. **按活动封总量（`STORAGE_MAX_LENGTH`）。** localStorage 是**同源共享**的：
+ *    一个活动页把它写爆，同源下所有活动页和管理台都会一起抛 QuotaExceededError。
+ *    超限时拒绝写入并回报错误，不静默截断。
+ *
+ * 3. **不落后端。** 纯客户端的便利功能，落到服务端只会带来隐私与容量问题。
+ */
+export const localStore = {
+  /** 命名空间前缀。宿主自己也要用它来识别"这些键是桥接数据"。 */
+  PREFIX: 'cea.storage',
+
+  /**
+   * 由宿主构造真正的 key。
+   *
+   * 活动标识来自宿主路由，片段来自活动 —— 两者都在这里被拼进去，**活动无法
+   * 提供完整 key**，这是"活动不能自由指定 localStorage key"的落点。
+   */
+  key(eventId: string, slot: string): string {
+    return `${this.PREFIX}:${eventId}:${slot}`
   },
 
-  save(eventId: string, formKey: string, value: unknown): void {
+  /** 某个活动已占用的字符数（不含即将写入的那条）。 */
+  usedBy(eventId: string, exceptSlot?: string): number {
+    const prefix = `${this.PREFIX}:${eventId}:`
+    let total = 0
     try {
-      window.sessionStorage.setItem(this.key(eventId, formKey), JSON.stringify(value))
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index)
+        if (!key || !key.startsWith(prefix)) continue
+        if (exceptSlot !== undefined && key === this.key(eventId, exceptSlot)) continue
+        total += (window.localStorage.getItem(key) ?? '').length
+      }
     } catch {
-      /* 存储不可用时静默降级：草稿只是便利功能 */
+      /* 存储不可用时按 0 计，让写入去撞真正的那道错 */
+    }
+    return total
+  },
+
+  /** 清掉本活动在命名空间下的全部数据。 */
+  clear(eventId: string): void {
+    const prefix = `${this.PREFIX}:${eventId}:`
+    try {
+      const doomed: string[] = []
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index)
+        if (key && key.startsWith(prefix)) doomed.push(key)
+      }
+      for (const key of doomed) window.localStorage.removeItem(key)
+    } catch {
+      /* 同上 */
     }
   },
 
-  load(eventId: string, formKey: string): unknown | null {
+  serialize(value: unknown): string {
+    let serialized: string
     try {
-      const raw = window.sessionStorage.getItem(this.key(eventId, formKey))
+      serialized = JSON.stringify(value)
+    } catch {
+      // 循环引用之类的值：这是活动页的 bug，明确报出来
+      throw new BridgeError(BRIDGE_ERROR.VALIDATION_FAILED, '数据无法序列化为 JSON')
+    }
+
+    if (serialized === undefined) {
+      // JSON.stringify(undefined) / 函数 / Symbol 都返回 undefined
+      throw new BridgeError(BRIDGE_ERROR.VALIDATION_FAILED, '数据无法序列化为 JSON')
+    }
+    return serialized
+  },
+
+  save(eventId: string, slot: string, value: unknown): void {
+    const serialized = this.serialize(value)
+
+    // 总量封顶：算上这条之后不能超过上限
+    const used = this.usedBy(eventId, slot)
+    if (used + serialized.length > STORAGE_MAX_LENGTH) {
+      throw new BridgeError(
+        BRIDGE_ERROR.STORAGE_TOO_LARGE,
+        `本地储存超出上限（本活动已用 ${used}，本条 ${serialized.length}，` +
+          `上限 ${STORAGE_MAX_LENGTH} 字符）`,
+      )
+    }
+
+    try {
+      window.localStorage.setItem(this.key(eventId, slot), serialized)
+    } catch {
+      // 存储不可用（隐私模式、浏览器级配额耗尽）时静默降级：
+      // 本地储存只是便利功能，不该因为它坏了而挡住填表和提交
+    }
+  },
+
+  load(eventId: string, slot: string): unknown | null {
+    try {
+      const raw = window.localStorage.getItem(this.key(eventId, slot))
       return raw ? JSON.parse(raw) : null
     } catch {
       return null
     }
   },
 
-  clear(eventId: string, formKey: string): void {
+  remove(eventId: string, slot: string): void {
     try {
-      window.sessionStorage.removeItem(this.key(eventId, formKey))
+      window.localStorage.removeItem(this.key(eventId, slot))
     } catch {
       /* 同上 */
     }

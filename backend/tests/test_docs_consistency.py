@@ -76,6 +76,9 @@ NOT_SETTINGS = {
     "QUOTA_EXHAUSTED",
     "RATE_LIMITED",
     "VALIDATION_FAILED",
+    # 桥接层的常量：它们是前端 protocol.ts 里的名字，不是后端配置项。
+    # 文档里必然出现，但不该要求它们在 core/config.py 里有对应字段。
+    "STORAGE_MAX_LENGTH",
 }
 
 

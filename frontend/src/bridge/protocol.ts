@@ -37,8 +37,6 @@ export const HOST_MESSAGE = {
 export const IFRAME_MESSAGE = {
   /** 活动页就绪，请求初始化 */
   READY: 'event:ready',
-  /** 内容高度变化 */
-  RESIZE: 'event:resize',
   /** 请求宿主导航 */
   NAVIGATE: 'event:navigate',
   /** 请求宿主更新标题 */
@@ -74,15 +72,46 @@ export const BRIDGE_OP = {
   /** 提交信息与文件 */
   FORM_SUBMIT_FILES: 'form.submitFiles',
   /**
-   * 草稿存取。
+   * 本地储存。
    *
-   * 活动页处于不透明源，**没有 localStorage**，因此草稿只能由宿主代存。
-   * 这三个操作由宿主在 sessionStorage 里按活动隔离地保存，**不落后端**。
+   * 活动页处于不透明源，**自己没有 localStorage**（访问会直接抛异常），所以
+   * 想存点本地数据只能由宿主代存：宿主写进**自己的 localStorage**，并保证
+   * 每个活动只能看到自己命名空间下的内容，**不落后端**。
+   *
+   * **key 的所有权在宿主。** 活动传的 `key` 只是一个命名空间片段，宿主会把
+   * 「活动标识 + 片段」拼成真正的 localStorage key（活动标识取自宿主自身路由）。
+   * 活动因此无法指到别的活动、也无法碰到宿主自己的键。
+   *
+   * 用 localStorage 而不是 sessionStorage，是为了让数据能跨标签页关闭、跨浏览器
+   * 重启存活 —— "填到一半关掉页面还能接着填"才是这套东西存在的理由。
    */
-  DRAFT_SAVE: 'draft.save',
-  DRAFT_LOAD: 'draft.load',
-  DRAFT_CLEAR: 'draft.clear',
+  STORAGE_SAVE: 'storage.save',
+  STORAGE_LOAD: 'storage.load',
+  STORAGE_REMOVE: 'storage.remove',
+  /** 清空本活动的全部本地数据 */
+  STORAGE_CLEAR: 'storage.clear',
 } as const
+
+/**
+ * 每个活动可占用的本地储存上限（字符数，按 JSON 序列化后计算）。
+ *
+ * **是"整个活动"的总量，不是单条的。** localStorage 是**同源共享**的资源：
+ * 一个活动页写爆它，同源下所有活动页和管理台都会一起抛 QuotaExceededError。
+ * 按活动封总量才能真正兜住这件事。
+ *
+ * 超出时宿主**拒绝写入并回报错误**，不做静默截断 —— 截断会让活动页读回一份与
+ * 它写下去的不一样的数据，那比写失败难查得多。
+ */
+export const STORAGE_MAX_LENGTH = 4096
+
+/**
+ * 活动可用的 key 片段形态。
+ *
+ * 只允许小写字母、数字、`-` 与 `_`。**不合规时拒绝而不是回落**：回落成默认值
+ * 会让两个本来不同的槽位撞在一起、互相覆盖数据 —— 那是静默的数据损坏，比报错
+ * 糟得多。（这一点与提交的 `kind` 不同：`kind` 只是分组标签，回落无害。）
+ */
+export const STORAGE_KEY_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
 export type BridgeOp = (typeof BRIDGE_OP)[keyof typeof BRIDGE_OP]
 
@@ -103,6 +132,10 @@ export const BRIDGE_ERROR = {
   VALIDATION_FAILED: 'validation_failed',
   NOT_FOUND: 'not_found',
   PAYLOAD_TOO_LARGE: 'payload_too_large',
+  /** 本地储存总量超出 `STORAGE_MAX_LENGTH`，宿主拒绝写入 */
+  STORAGE_TOO_LARGE: 'storage_too_large',
+  /** key 片段不合规。**拒绝而不是回落**，避免两个槽位相撞覆盖数据 */
+  STORAGE_KEY_INVALID: 'storage_key_invalid',
   UNSUPPORTED: 'unsupported_op',
   TIMEOUT: 'timeout',
   CANCELLED: 'cancelled',

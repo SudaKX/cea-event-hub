@@ -59,8 +59,10 @@ const sdkReady = document.getElementById('cea-sdk') !== null
 | `CEA.toast(message, level?)` | 请求宿主弹提示 |
 | `CEA.navigate(path)` | 请求宿主导航（只接受站内路径） |
 | `CEA.setTitle(title)` | 更新**浏览器标签标题** |
-| `CEA.resize()` | 空操作，保留兼容（见下方"版面"） |
-| `CEA.draft.save/load/clear(value?, formKey?)` | 草稿存取 |
+| `CEA.storage.save/load/remove/clear` | 本地储存（见下方"本地储存"） |
+
+> 早期版本的 `CEA.resize()` **已移除**。它属于"iframe 按内容高度撑开"的旧版式，
+> 而活动页现在是全屏的（见下方"版面"）。
 
 ### `CEA.submit` 的参数
 
@@ -89,9 +91,51 @@ await CEA.submit({
 因此：
 
 - **页面自己滚动** —— 正常写你的 HTML 即可，内容超长时是页面内部滚动
-- **不要依赖 `CEA.resize()`** —— 它现在什么都不做。它的存在是为了兼容早期调用；
-  在"iframe 按内容高度撑开"的旧版式下才有意义，而那种版式会让长页面产生双层滚动条
 - 想改浏览器标签标题用 `CEA.setTitle()`，活动标题默认已经写进去了
+
+## 本地储存
+
+活动页处在**不透明源**，`localStorage` 与 `sessionStorage` 都会直接抛异常。所以
+想存点本地数据只能请宿主代存：
+
+```js
+await CEA.storage.save('signup', { name: '张三', grade: '2' });
+const saved = await CEA.storage.load('signup');   // -> { name: '张三', ... } 或 null
+await CEA.storage.remove('signup');               // 删掉这一条
+await CEA.storage.clear();                        // 清空**本活动**的全部本地数据
+```
+
+数据存在**宿主自己的 localStorage** 里，**不落后端**。
+
+### key 的所有权在宿主
+
+你传的 `key` 只是**本活动内**的一段命名空间。真正写进 localStorage 的键由宿主拼成：
+
+```
+cea.storage:{活动标识}:{你的 key}
+             ^^^^^^^^^^ 来自宿主自身路由，你无法伪造
+```
+
+所以**你无法指到别的活动的数据，也碰不到宿主自己的键**。这是结构性的，不是靠约定。
+
+`key` 只能是 1–64 位小写字母、数字、`-`、`_`，且以字母或数字开头。**不合规会抛
+`storage_key_invalid`，不会回落** —— 回落会让两个本来不同的槽位撞在一起互相覆盖，
+那是静默的数据损坏。
+
+### 容量上限
+
+**本活动所有本地数据加起来不能超过 4096 字符**（按 JSON 序列化后计算）。超出时抛
+`storage_too_large`，宿主**不截断** —— 截断会让你读回一份与写下去的不一样的数据。
+
+这个上限是按活动封的，因为 localStorage 是**同源共享**的资源：一个活动页把它写爆，
+同源下所有活动页和管理台都会一起失败。
+
+典型用法（表单草稿）远低于这个量级；真要存更多东西，应该走后端。
+
+```js
+// 草稿存不下不该挡住提交，所以吞掉错误是合理的
+CEA.storage.save('signup', snapshot).catch(() => {});
+```
 
 ## 能力边界：这些事做不到
 
@@ -99,7 +143,7 @@ await CEA.submit({
 
 | 做不到 | 原因 | 替代 |
 |---|---|---|
-| `localStorage` / `sessionStorage` | 不透明源没有存储 | `CEA.draft.*`（宿主按活动代存） |
+| `localStorage` / `sessionStorage` | 不透明源没有存储 | `CEA.storage.*`（宿主按活动代存） |
 | `document.cookie` | 同上 | 不需要，活动页本就不持有凭据 |
 | `history.pushState` | 抛 SecurityError | 页内多步流程用 hash（`#step2`），或 `CEA.navigate()` |
 | `fetch('/api/v1/...')` | **被浏览器拦死** | 一切数据经 `CEA.*` |
