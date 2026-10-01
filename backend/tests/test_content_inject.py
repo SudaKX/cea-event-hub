@@ -54,8 +54,18 @@ class TestPureInjection:
     def test_detects_id_reference(self) -> None:
         assert has_sdk_reference(f'<script src="/other.js" id="{SDK_ELEMENT_ID}"></script>')
 
-    def test_detects_src_reference(self) -> None:
-        assert has_sdk_reference('<script src="/sdk/v1/cea.js"></script>')
+    def test_src_alone_is_not_a_reference(self) -> None:
+        """**判断只看 id。**
+
+        路径可能变（/sdk/v1/ → /sdk/v2/），按 src 判断的话，SDK 换路径后所有
+        老页面都会被判定成"没有引用"。所以只带 src 的标签不算数 —— 不做迁移，
+        老页面由人工改成带 id 的形态。
+        """
+        assert not has_sdk_reference('<script src="/sdk/v1/cea.js"></script>')
+        assert not has_sdk_reference('<script src="/sdk/v1/cea.js?v=2"></script>')
+
+    def test_src_pointing_elsewhere_is_also_not_a_reference(self) -> None:
+        assert not has_sdk_reference('<script src="/sdk/v1/other.js"></script>')
 
     def test_plain_page_has_no_reference(self) -> None:
         assert not has_sdk_reference("<html><head></head><body>hi</body></html>")
@@ -110,10 +120,25 @@ class TestPureInjection:
         assert not has_sdk_reference(html)
 
     def test_reference_with_query_string_is_detected(self) -> None:
-        assert has_sdk_reference('<script src="/sdk/v1/cea.js?v=2"></script>')
+        assert has_sdk_reference(
+            f'<script src="/sdk/v1/cea.js?v=2" id="{SDK_ELEMENT_ID}"></script>'
+        )
 
     def test_unrelated_script_is_not_a_reference(self) -> None:
         assert not has_sdk_reference('<script src="/sdk/v1/other.js"></script>')
+
+    def test_src_only_page_gets_a_second_tag(self) -> None:
+        """不做迁移的直接后果，写下来免得日后被当成 bug。
+
+        只带 src 的老写法会被判定成"没有引用"，因而得到一个注入的新标签 ——
+        结果是 SDK 加载两次。这是刻意接受的：与其在代码里维护一条迁移路径，
+        不如让老页面显式改过来（示例内容已经改好）。
+        """
+        html = '<html><head><script src="/sdk/v1/cea.js"></script></head><body>x</body></html>'
+        result = ensure_sdk(html, src="/sdk/v1/cea.js")
+
+        assert result.count("cea.js") == 2
+        assert f'id="{SDK_ELEMENT_ID}"' in result
 
     def test_inserts_before_head_close(self) -> None:
         html = "<html><head><title>t</title></head><body>hi</body></html>"
@@ -143,7 +168,10 @@ class TestPureInjection:
         assert result.endswith("<div>hi</div>")
 
     def test_ensure_is_idempotent(self) -> None:
-        html = '<html><head></head><body><script src="/sdk/v1/cea.js"></script></body></html>'
+        html = (
+            '<html><head><script src="/sdk/v1/cea.js" id="cea-sdk"></script></head>'
+            "<body>hi</body></html>"
+        )
         assert ensure_sdk(html, src="/sdk/v1/cea.js") == html
 
     def test_ensure_injects_once(self) -> None:
@@ -169,13 +197,18 @@ class TestServedHtml:
         self, client, test_db, content_root
     ) -> None:
         _seed_event(test_db)
-        explicit = '<html><head><script src="/sdk/v1/cea.js"></script></head><body>hi</body></html>'
+        # 显式引用必须带 id —— 判断只看 id
+        explicit = (
+            '<html><head><script src="/sdk/v1/cea.js" id="cea-sdk"></script>'
+            "</head><body>hi</body></html>"
+        )
         _write(content_root, "spring-2026", "index.html", explicit)
 
         body = client.get("/content/spring-2026/index.html").text
         assert body == explicit
         # 只出现一次，没有被重复注入
         assert body.count("cea.js") == 1
+        assert body.count(SDK_ELEMENT_ID) == 1
 
     def test_injection_can_be_disabled(
         self, test_db, content_root, monkeypatch

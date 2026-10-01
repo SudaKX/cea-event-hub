@@ -8,6 +8,17 @@ postMessage 也自举不了 —— 要"收到地址再加载"，活动页得先�
 这不违反"宿主不得向 iframe 注入脚本"那条约束：注入发生在内容服务端，返回的是
 另一份字节；宿主仍然碰不到 iframe 的文档，沙箱边界没有任何变化。
 
+## 判断只看 `id`
+
+一份文档里"桥接脚本是否就位"的**唯一判据**是存在 `id="cea-sdk"` 的 `<script>`。
+
+`src` **不参与判断**。理由是路径可能变（`/sdk/v1/` → `/sdk/v2/`），而 id 是稳定的：
+按 src 判断的话，SDK 换路径后所有老页面都会被判定成"没有引用"。
+
+**不做迁移。** 早期指南里写的是 `<script src="/sdk/v1/cea.js"></script>`（没有 id），
+这种形态**不特殊处理** —— 它会被判定成"没有引用"，因而得到一个注入的新标签。要避免
+重复加载，就把老页面手工改成带 id 的形态；示例内容已经改好。
+
 ## 为什么用 HTMLParser 定位，而不是正则，也不是 XML 解析
 
 **不用 XML 解析**（`ElementTree` / `lxml` 树模式）：
@@ -21,18 +32,6 @@ postMessage 也自举不了 —— 要"收到地址再加载"，活动页得先�
 **不用正则**：`</head>` 可能出现在注释或内联脚本的字符串里，正则会把插入点放到
 那里面，等于没插 —— SDK 不加载，而页面看上去一切正常。`HTMLParser` 会把注释交给
 `handle_comment`、把 `<script>` 内容按 CDATA 处理，两种情况都不会误判。
-
-`HTMLParser` 是分词器而非验证器，不重建文档，正好取两者之长：定位准确，且不改写。
-
-## 幂等
-
-活动页自己写了 `<script src="/sdk/v1/cea.js">`（或任何带 `id="cea-sdk"` 的脚本
-标签）就不再注入，两种写法都能工作。判断同样走解析器 —— 只看真正的 `<script>`
-标签，因此"在注释里提了一句"不会被误判成已引用。
-
-**用 `id` 而不是 `class` 标记注入的标签。** 两者都是全局属性、都合法；这里选
-`id` 是因为语义更准：一份文档里只该有一个桥接脚本，`id` 的"唯一"正好对上
-`class` 的"可多个"。它同时给活动页一个稳定的抓手 —— `getElementById('cea-sdk')`。
 """
 
 from __future__ import annotations
@@ -40,8 +39,8 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 
-#: 注入的标签会带上这个 id。既是幂等判断的依据，也让作者在 DevTools 里一眼
-#: 看出这一行不是自己写的。
+#: 桥接脚本标签的 id。它是"SDK 是否就位"的唯一判据，也让作者在 DevTools 里
+#: 一眼看出这一行不是自己写的。
 SDK_ELEMENT_ID = "cea-sdk"
 
 #: 解析器不可用时的兜底。只在 `_scan` 返回 None 时使用。
@@ -67,22 +66,22 @@ def _line_starts(text: str) -> list[int]:
 
 
 class _DocumentScan(HTMLParser):
-    """只做定位与判定，**不重建文档**。
-
-    产出三个信息：
-      - `head_end`：`</head>` 的绝对偏移，插入点首选
-      - `body_content`：`<body ...>` 之后的内容起点，次选
-      - `has_sdk_script`：是否已经存在真正的桥接脚本标签
-    """
+    """只做定位与判定，**不重建文档**。"""
 
     def __init__(self, text: str, src: str) -> None:
         # convert_charrefs=False：不合并字符引用，避免影响偏移计算
         super().__init__(convert_charrefs=False)
         self._starts = _line_starts(text)
         self._src = src
+
+        #: `</head>` 的绝对偏移 —— 插入新标签的首选位置
         self.head_end: int | None = None
+        #: `<body ...>` 之后的内容起点 —— 次选
         self.body_content: int | None = None
-        self.has_sdk_script = False
+        #: 是否存在 id="cea-sdk" 的脚本。**这是唯一的判断依据。**
+        self.has_sdk_id = False
+        #: 存在 src 指向 SDK 的脚本。仅用于诊断提示，**不参与判断**。
+        self.sdk_by_src = False
 
     def _offset(self) -> int:
         line, column = self.getpos()
@@ -93,8 +92,7 @@ class _DocumentScan(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs) -> None:  # type: ignore[no-untyped-def]
         if tag == "script":
-            if self._looks_like_sdk(attrs):
-                self.has_sdk_script = True
+            self._inspect_script(attrs)
             return
 
         if tag == "body" and self.body_content is None:
@@ -109,17 +107,26 @@ class _DocumentScan(HTMLParser):
             # getpos() 在结束标签上指向 `<`，正是要插入的位置
             self.head_end = self._offset()
 
-    def _looks_like_sdk(self, attrs) -> bool:  # type: ignore[no-untyped-def]
-        """只看真正的 script 标签属性，因此注释里提到不算。"""
+    def _inspect_script(self, attrs) -> None:  # type: ignore[no-untyped-def]
+        element_id: str | None = None
+        matches_src = False
         expected = self._src.split("?")[0]
+
         for name, value in attrs:
-            if name == "id" and value == SDK_ELEMENT_ID:
-                return True
-            if name == "src" and value:
+            if name == "id":
+                element_id = value
+            elif name == "src" and value:
                 # 允许带查询串（?v=…），因此比较去掉查询串后的路径
                 if value.split("?")[0].endswith(expected):
-                    return True
-        return False
+                    matches_src = True
+
+        if element_id == SDK_ELEMENT_ID:
+            self.has_sdk_id = True
+            return
+
+        # 记下来只为了在需要时报出更有用的信息；判断不依赖它
+        if matches_src:
+            self.sdk_by_src = True
 
 
 def _scan(html: str, src: str) -> _DocumentScan | None:
@@ -135,60 +142,64 @@ def _scan(html: str, src: str) -> _DocumentScan | None:
 
 
 def has_sdk_reference(html: str, *, src: str = "/sdk/v1/cea.js") -> bool:
-    """活动页是否已经自己引用了桥接脚本。
+    """桥接脚本是否已就位。
 
-    走解析器而不是子串匹配：注释里写一句 `<script src="/sdk/v1/cea.js">` 不算
-    引用，按子串判断会因此**跳过注入**，结果页面拿不到 SDK —— 而那个方向的
-    误判代价更大。
+    **只看 `id="cea-sdk"`**，不看 src。理由见模块开头：路径会变，id 不会。
     """
     scan = _scan(html, src)
     if scan is not None:
-        return scan.has_sdk_script
+        return scan.has_sdk_id
 
-    # 解析器都跑不起来时退回过松判断：宁可"以为已引用"也不重复插入
-    lowered = html.lower()
-    return SDK_ELEMENT_ID in lowered or src.lower() in lowered
-
-
-def inject_sdk_tag(html: str, *, src: str) -> str:
-    """把桥接脚本插进 HTML。
-
-    插入位置按可靠性依次退让：
-      1. `</head>` 之前 —— 最常见，也让 SDK 尽早开始监听
-      2. `<body ...>` 之后 —— 没有 head 的片段式页面
-      3. 正则兜底 —— 解析器没能给出位置
-      4. 直接前置 —— 畸形到连兜底都匹配不上
-
-    第 4 种情况下前置而不是追加：SDK 要在活动页自己的脚本之前就位，否则活动页
-    里的 `CEA.ready` 会在 SDK 定义 `window.CEA` 之前求值。
-    """
-    tag = sdk_tag(src)
-    scan = _scan(html, src)
-
-    if scan is not None:
-        if scan.head_end is not None:
-            return html[: scan.head_end] + tag + html[scan.head_end :]
-        if scan.body_content is not None:
-            return html[: scan.body_content] + tag + html[scan.body_content :]
-        return tag + html
-
-    # 解析器不可用时的兜底，保持与旧实现一致
-    head_close = _HEAD_CLOSE.search(html)
-    if head_close:
-        return html[: head_close.start()] + tag + html[head_close.start() :]
-
-    body_open = _BODY_OPEN.search(html)
-    if body_open:
-        return html[: body_open.end()] + tag + html[body_open.end() :]
-
-    return tag + html
+    # 解析器都跑不起来时的退路：按 id 做子串匹配。仍然不看 src。
+    return SDK_ELEMENT_ID in html.lower()
 
 
 def ensure_sdk(html: str, *, src: str) -> str:
-    """需要时注入；已经有引用则原样返回。"""
-    if has_sdk_reference(html, src=src):
+    """确保 HTML 里有带 id 的桥接脚本标签。"""
+    scan = _scan(html, src)
+
+    if scan is not None:
+        if scan.has_sdk_id:
+            # 已就位，原样返回
+            return html
+        return _insert(html, scan.head_end, scan.body_content, src)
+
+    # 解析器不可用：退回到不解析的做法
+    if SDK_ELEMENT_ID in html.lower():
         return html
-    return inject_sdk_tag(html, src=src)
+    head_close = _HEAD_CLOSE.search(html)
+    if head_close:
+        return _insert(html, head_close.start(), None, src)
+    body_open = _BODY_OPEN.search(html)
+    if body_open:
+        return _insert(html, None, body_open.end(), src)
+    return sdk_tag(src) + html
+
+
+def _insert(
+    html: str, head_end: int | None, body_content: int | None, src: str
+) -> str:
+    """插入新标签。
+
+    位置按可靠性依次退让：`</head>` 之前 -> `<body ...>` 之后 -> 直接前置。
+
+    最后一种前置而不是追加：SDK 要在活动页自己的脚本之前就位，否则活动页里的
+    `CEA.ready` 会在 SDK 定义 `window.CEA` 之前求值。
+    """
+    tag = sdk_tag(src)
+    if head_end is not None:
+        return html[:head_end] + tag + html[head_end:]
+    if body_content is not None:
+        return html[:body_content] + tag + html[body_content:]
+    return tag + html
+
+
+def inject_sdk_tag(html: str, *, src: str) -> str:
+    """无条件确保有带 id 的标签（不做"是否已引用"的判断）。
+
+    保留这个名字是因为测试与文档都在用；语义上它就是 `ensure_sdk` 的别名。
+    """
+    return ensure_sdk(html, src=src)
 
 
 __all__ = [
