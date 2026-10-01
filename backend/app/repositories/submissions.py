@@ -43,31 +43,6 @@ class SubmissionRepository:
             )
         )
 
-    def find_recent_by_payload_hash(
-        self,
-        session: Session,
-        *,
-        event_id: str,
-        submitter: str,
-        payload_hash: str,
-        since: datetime,
-    ) -> Submission | None:
-        """窗口内同一提交者的相同内容。
-
-        这是"用户连点两下"的兜底，不依赖客户端配合提供幂等键。
-        """
-        return session.scalar(
-            select(Submission)
-            .where(
-                Submission.event_id == event_id,
-                Submission.submitter == submitter,
-                Submission.payload_hash == payload_hash,
-                Submission.created_at >= since,
-            )
-            .order_by(Submission.id.desc())
-            .limit(1)
-        )
-
     def list_for_event(
         self,
         session: Session,

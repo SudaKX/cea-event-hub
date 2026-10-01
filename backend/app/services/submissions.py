@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any, BinaryIO, Sequence
 
 from sqlalchemy.orm import Session
@@ -36,7 +35,7 @@ from app.core.exceptions import (
     ValidationFailed,
 )
 from app.core.ports import FileStorage
-from app.core.security import canonical_json, hash_ip, hash_payload
+from app.core.security import canonical_json, hash_ip
 from app.core.text import sanitize_kind, truncate
 from app.db.models import Event, Submission, SubmissionFile, User
 from app.infra.storage_local import sniff_mime
@@ -112,9 +111,21 @@ class SubmissionService:
         """
         if user is not None:
             return f"u:{user.id}"
-        if client_id:
-            return f"a:{truncate(client_id.strip(), 64)}"
-        return "a:unknown"
+
+        cleaned = (client_id or "").strip()
+        if not cleaned:
+            # 匿名提交必须带客户端标识。
+            #
+            # 少了它，同一个活动下**所有**匿名提交都会塌缩成 `a:unknown` 这一个
+            # 提交者：管理端无法区分它们，按提交者做的分组与统计全部失真。
+            # SDK 由宿主持久化并提供 clientId，所以走 SDK 的活动页永远不会缺它；
+            # 直连 API 的调用方则会在这里立刻知道。
+            raise ValidationFailed(
+                "匿名提交必须带 client_id",
+                fields={"client_id": "缺少客户端标识"},
+            )
+
+        return f"a:{truncate(cleaned, 64)}"
 
     # ------------------------------------------------------------------
     # 提交
@@ -139,25 +150,22 @@ class SubmissionService:
 
         submitter = self.resolve_submitter(user, client_id)
         safe_kind = sanitize_kind(kind)
-        payload_hash = hash_payload(payload)
 
-        # ---- 去重（必须在配额之前）----
+        # ---- 幂等（必须在配额之前）----
+        #
+        # 只认客户端给的幂等键。**刻意不再按内容哈希去重**：那种启发式不看请求
+        # 身份、只看内容相似度，误判时会把用户的提交连同附件一起静默丢弃 ——
+        # 而"字段没改、只换了一个附件"是真实会发生的场景。
+        # 重复提交留下两条记录是响亮且可恢复的（管理员看得见、删掉即释放名额），
+        # 静默丢弃则是安静且不可恢复的。两害相权取其轻。
+        #
+        # 防连点由活动页禁用按钮承担（示例页已如此），防重传由幂等键承担。
         if idem_key:
             existing = self.submissions.find_by_idem_key(
                 session, event_id=event.id, idem_key=truncate(idem_key, 64)
             )
             if existing is not None:
                 return SubmissionResult(existing, deduplicated=True)
-
-        duplicate = self.submissions.find_recent_by_payload_hash(
-            session,
-            event_id=event.id,
-            submitter=submitter,
-            payload_hash=payload_hash,
-            since=utcnow() - timedelta(seconds=self.settings.DEDUP_WINDOW_SECONDS),
-        )
-        if duplicate is not None:
-            return SubmissionResult(duplicate, deduplicated=True)
 
         # ---- 配额（单语句 CAS，与后面的插入同事务）----
         self._acquire_quota(session, event)
@@ -177,7 +185,6 @@ class SubmissionService:
                 ip_hash=self._hash_ip(ip),
                 kind=safe_kind,
                 payload=payload,
-                payload_hash=payload_hash,
                 idem_key=truncate(idem_key, 64) if idem_key else None,
                 status=SubmissionStatus.RECEIVED.value,
             )

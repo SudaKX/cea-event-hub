@@ -330,7 +330,6 @@ class TestQuotaCounter:
                         event_id="drifted",
                         submitter="a:anon",
                         payload={},
-                        payload_hash=f"h{index}",
                     )
                 )
 

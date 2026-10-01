@@ -53,8 +53,6 @@ class Submission(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict
     )
-    # 规范化序列化后的摘要，用于窗口内内容去重
-    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
     # 客户端提供的幂等键；命中则返回原提交且不消耗配额
     idem_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -95,12 +93,6 @@ class Submission(Base):
             "created_at",
         ),
         Index("ix_submissions_event_id_created_at", "event_id", "created_at"),
-        Index(
-            "ix_submissions_event_id_payload_hash",
-            "event_id",
-            "payload_hash",
-            "created_at",
-        ),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

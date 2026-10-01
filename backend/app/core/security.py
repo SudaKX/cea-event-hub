@@ -94,19 +94,17 @@ def generate_password(length: int = _DEFAULT_PASSWORD_LENGTH) -> str:
 
 
 def canonical_json(payload: Any) -> str:
-    """规范化序列化：键排序 + 无多余空白，使相同内容得到相同摘要。
+    """规范化序列化：键排序 + 无多余空白。
 
-    不加 `ensure_ascii=False` 的话，中文会被转义成 \\uXXXX，虽然摘要仍然稳定，
-    但落库的 payload 可读性变差。
+    用于按体积上限校验 payload（同样内容总得到同样的字节数）。曾经也用于算内容
+    指纹做窗口内去重，那个机制已经移除 —— 见 `services/submissions.py` 里的说明。
+
+    不加 `ensure_ascii=False` 的话，中文会被转义成 \\uXXXX，字节数会虚高，
+    体积校验就会误伤中文内容。
     """
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
-
-
-def hash_payload(payload: Any) -> str:
-    """内容指纹，用于窗口内重复提交去重。不是凭据。"""
-    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 def hash_ip(ip: str, salt: str) -> str:

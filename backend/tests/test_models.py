@@ -142,12 +142,11 @@ class TestUniqueConstraints:
 
 
 class TestIdempotencyKeyConstraint:
-    def _submission(self, *, idem_key: str | None, payload_hash: str = "h1") -> Submission:
+    def _submission(self, *, idem_key: str | None) -> Submission:
         return Submission(
             event_id="spring-2026",
             submitter="a:anon",
             payload={},
-            payload_hash=payload_hash,
             idem_key=idem_key,
         )
 
@@ -163,11 +162,11 @@ class TestIdempotencyKeyConstraint:
                 session.add(self._submission(idem_key="key-1"))
 
     def test_null_idempotency_keys_do_not_collide(self, test_db: Database) -> None:
-        # 未提供幂等键的提交可以有多条——这正是全靠客户端配合的写法不能成立的原因
+        # 未提供幂等键的提交可以有多条 —— 幂等键是可选的，重复提交不是错误
         with test_db.session() as session:
             self._seed_event(session)
-            session.add(self._submission(idem_key=None, payload_hash="h1"))
-            session.add(self._submission(idem_key=None, payload_hash="h2"))
+            session.add(self._submission(idem_key=None))
+            session.add(self._submission(idem_key=None))
         with test_db.session() as session:
             assert session.query(Submission).count() == 2
 
@@ -182,7 +181,6 @@ class TestIdempotencyKeyConstraint:
                     event_id="autumn-2026",
                     submitter="a:anon",
                     payload={},
-                    payload_hash="h2",
                     idem_key="key-1",
                 )
             )

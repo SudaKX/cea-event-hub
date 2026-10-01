@@ -188,10 +188,10 @@ class TestRateLimitEnforcement:
         _seed_event(test_db)
         monkeypatch.setattr(global_settings, "RATE_LIMIT_SUBMIT_IP_MAX", 2)
 
-        assert client.post(f"{API}/events/spring-2026/submissions", json={"n": 1}).status_code == 201
-        assert client.post(f"{API}/events/spring-2026/submissions", json={"n": 2}).status_code == 201
+        assert client.post(f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 1}).status_code == 201
+        assert client.post(f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 2}).status_code == 201
 
-        response = client.post(f"{API}/events/spring-2026/submissions", json={"n": 3})
+        response = client.post(f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 3})
         assert response.status_code == 429
         assert response.json()["error"]["code"] == "rate_limited"
         assert "Retry-After" in response.headers
@@ -203,8 +203,8 @@ class TestRateLimitEnforcement:
         _seed_event(test_db, max_submissions=1)
         monkeypatch.setattr(global_settings, "RATE_LIMIT_SUBMIT_IP_MAX", 100)
 
-        assert client.post(f"{API}/events/spring-2026/submissions", json={"n": 1}).status_code == 201
-        assert client.post(f"{API}/events/spring-2026/submissions", json={"n": 2}).status_code == 409
+        assert client.post(f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 1}).status_code == 201
+        assert client.post(f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 2}).status_code == 409
 
     def test_registration_is_rate_limited(self, client, monkeypatch) -> None:
         monkeypatch.setattr(global_settings, "RATE_LIMIT_AUTH_IP_MAX", 2)
@@ -262,13 +262,13 @@ class TestRateLimitEnforcement:
                 f"{API}/auth/login", json={"username": "alice", "password": "correct-horse"}
             )
             assert first.post(
-                f"{API}/events/spring-2026/submissions", json={"n": 1}
+                f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 1}
             ).status_code == 201
             assert first.post(
-                f"{API}/events/spring-2026/submissions", json={"n": 2}
+                f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 2}
             ).status_code == 201
 
-            response = first.post(f"{API}/events/spring-2026/submissions", json={"n": 3})
+            response = first.post(f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 3})
             assert response.status_code == 429
 
     def test_disabling_the_limiter_lets_everything_through(
@@ -280,7 +280,7 @@ class TestRateLimitEnforcement:
 
         for index in range(5):
             response = client.post(
-                f"{API}/events/spring-2026/submissions", json={"n": index}
+                f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": index}
             )
             assert response.status_code == 201
 
@@ -291,14 +291,14 @@ class TestRateLimitEnforcement:
         monkeypatch.setattr(global_settings, "RATE_LIMIT_SUBMIT_IP_MAX", 1)
 
         assert client.post(
-            f"{API}/events/spring-2026/submissions", json={"n": 1}
+            f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 1}
         ).status_code == 201
         assert client.post(
-            f"{API}/events/spring-2026/submissions", json={"n": 2}
+            f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 2}
         ).status_code == 429
         # 另一个活动仍有自己的额度
         assert client.post(
-            f"{API}/events/autumn-2026/submissions", json={"n": 3}
+            f"{API}/events/autumn-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 3}
         ).status_code == 201
 
 
@@ -313,8 +313,8 @@ class TestRateLimitDoesNotWriteToDatabase:
         _seed_event(test_db)
         monkeypatch.setattr(global_settings, "RATE_LIMIT_SUBMIT_IP_MAX", 1)
 
-        client.post(f"{API}/events/spring-2026/submissions", json={"n": 1})
-        client.post(f"{API}/events/spring-2026/submissions", json={"n": 2})
+        client.post(f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 1})
+        client.post(f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 2})
 
         with test_db.session() as session:
             assert session.scalar(select(func.count()).select_from(Submission)) == 1

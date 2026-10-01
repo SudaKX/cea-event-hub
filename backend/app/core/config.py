@@ -67,8 +67,6 @@ class Settings(BaseSettings):
     # 可匿名提交活动的默认条数上限；需登录活动默认不限额
     MAX_SUBMISSIONS_PER_EVENT_ANON: int | None = 4096
     MAX_SUBMISSIONS_PER_EVENT_AUTHED: int | None = None
-    # 同一提交者提交完全相同内容的去重窗口
-    DEDUP_WINDOW_SECONDS: int = 300
     # 单活动数据目录字节配额
     MAX_EVENT_STORAGE_BYTES: int = 512 * 1024 * 1024
 

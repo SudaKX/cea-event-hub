@@ -97,7 +97,6 @@ class TestSqlitePragmas:
                 event_id="cascade-test",
                 submitter="a:anon",
                 payload={"a": 1},
-                payload_hash="hash-1",
                 status=SubmissionStatus.RECEIVED.value,
             )
             session.add(submission)
@@ -154,7 +153,6 @@ class TestSqlitePragmas:
                         event_id="does-not-exist",
                         submitter="a:anon",
                         payload={},
-                        payload_hash="h",
                         status=SubmissionStatus.RECEIVED.value,
                         created_at=utcnow(),
                     )

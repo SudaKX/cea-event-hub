@@ -16,7 +16,6 @@ from app.core.security import (
     generate_token,
     hash_ip,
     hash_password,
-    hash_payload,
     hash_token,
     needs_rehash,
     verify_password,
@@ -92,9 +91,12 @@ class TestSecurityPrimitives:
         assert len(hash_ip("1.2.3.4", "salt-a")) == 64
 
     def test_canonical_json_is_key_order_independent(self) -> None:
+        # 同内容必须得到同样的字节数，否则按体积上限的校验会随键序抖动
         assert canonical_json({"b": 1, "a": 2}) == canonical_json({"a": 2, "b": 1})
-        assert hash_payload({"a": 1, "b": 2}) == hash_payload({"b": 2, "a": 1})
-        assert hash_payload({"a": 1}) != hash_payload({"a": 2})
+        assert len(canonical_json({"a": 1, "b": 2})) == len(
+            canonical_json({"b": 2, "a": 1})
+        )
+        assert canonical_json({"a": 1}) != canonical_json({"a": 2})
 
     def test_canonical_json_keeps_unicode_readable(self) -> None:
         assert "张三" in canonical_json({"name": "张三"})

@@ -29,7 +29,10 @@ def _seed_event(test_db, event_id="spring-2026", **overrides) -> None:
 
 
 def _submit(client, payload, *, event_id="spring-2026", kind=None, files=()):
-    params = {"kind": kind} if kind else {}
+    # 匿名提交必须带 client_id（见 SubmissionService.resolve_submitter）
+    params = {"client_id": "browser-review"}
+    if kind:
+        params["kind"] = kind
     if files:
         import json
 

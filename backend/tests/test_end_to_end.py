@@ -180,10 +180,10 @@ class TestSubmissionChain:
         key = {"Idempotency-Key": "one-key"}
 
         first = anon_client.post(
-            f"{API}/events/spring-2026/submissions", json={"n": 1}, headers=key
+            f"{API}/events/spring-2026/submissions", params={"client_id": "browser-e2e"}, json={"n": 1}, headers=key
         )
         second = anon_client.post(
-            f"{API}/events/spring-2026/submissions", json={"n": 1}, headers=key
+            f"{API}/events/spring-2026/submissions", params={"client_id": "browser-e2e"}, json={"n": 1}, headers=key
         )
 
         assert second.json()["deduplicated"] is True
@@ -198,15 +198,15 @@ class TestSubmissionChain:
         _seed_event(test_db, submission_requires_login=True)
 
         assert anon_client.post(
-            f"{API}/events/spring-2026/submissions", json={"n": 1}
+            f"{API}/events/spring-2026/submissions", params={"client_id": "browser-e2e"}, json={"n": 1}
         ).status_code == 401
         assert user_client.post(
-            f"{API}/events/spring-2026/submissions", json={"n": 1}
+            f"{API}/events/spring-2026/submissions", params={"client_id": "browser-e2e"}, json={"n": 1}
         ).status_code == 201
 
     def test_unpublished_event_is_not_submittable(self, anon_client, test_db) -> None:
         _seed_event(test_db, status=EventStatus.DRAFT.value)
-        response = anon_client.post(f"{API}/events/spring-2026/submissions", json={"n": 1})
+        response = anon_client.post(f"{API}/events/spring-2026/submissions", params={"client_id": "browser-e2e"}, json={"n": 1})
         # draft 活动对公开接口不可见，因此是 404 而不是 403
         assert response.status_code == 404
 

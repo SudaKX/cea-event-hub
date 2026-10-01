@@ -71,7 +71,7 @@ await CEA.submit({
   payload: { /* 任意 JSON 对象 */ },
   files: [File, File],        // 可选
   kind: 'signup',             // 可选分类标签，管理端据此分组
-  idempotencyKey: crypto.randomUUID(),  // 强烈建议带上
+  idempotencyKey: intentKey,  // 强烈建议带上，见下方"防重复提交"
   onProgress: (loaded, total) => {},    // 可选，真实上传进度
 });
 ```
@@ -79,11 +79,51 @@ await CEA.submit({
 **带不带文件都是同一次调用**：SDK 会自动选择合适的端点。作者不需要知道后端有两个
 端点，也不需要为"既有字段又有文件"分两次提交（那会让管理端看到两条记录）。
 
-**建议始终带 `idempotencyKey`。** 网络抖动或用户连点导致重试时，服务端会返回原提交
-而不是新建一条，返回值的 `deduplicated` 为 `true`。
-
 **`onProgress` 是真实进度。** 请求由宿主发出，所以它能拿到上传进度并回推给活动页；
 `total` 在服务端未提供总长时为 `null`，此时只能显示"已上传 N 字节"。
+
+### 防重复提交（活动页的责任）
+
+**平台不会按内容替你判重。** 两次内容相同的提交就是两条记录 —— 因为按内容判重不看
+请求身份，一旦误判就会把你的提交连同附件一起**静默丢弃**，而用户看到的是"提交成功"。
+多一条记录是可见且可恢复的，静默丢弃不是。
+
+所以防重复要你自己做，两件事配合：
+
+**1. 提交期间禁用按钮** —— 挡住连点。这是最直接的一道防线：
+
+```js
+submitButton.disabled = true;
+try { await CEA.submit({...}); } finally { submitButton.disabled = false; }
+```
+
+**2. 按"意图"复用 `idempotencyKey`** —— 挡住网络重传。
+
+关键在键的**生命周期**：它标识的是**一次提交意图**，不是一次点击。所以要在用户
+**开始填写**时生成一次，成功后重新生成，而不是每次点击都新生成一个：
+
+```js
+let intentKey = crypto.randomUUID();   // 一次填写 = 一个意图
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  submitButton.disabled = true;
+  try {
+    const result = await CEA.submit({ payload, idempotencyKey: intentKey });
+    if (result.deduplicated) {
+      show('这次提交此前已经收到过了。');   // 重传，不是新提交
+    } else {
+      show('提交成功。');
+    }
+    intentKey = crypto.randomUUID();   // 下一次填写是新的意图
+  } finally {
+    submitButton.disabled = false;
+  }
+});
+```
+
+反过来说：**每次点击都生成新键，幂等键就挡不住连点** —— 每次点击都是一个"新意图"，
+服务端无从判断它们其实是同一次。那种写法只能靠第 1 条兜住。
 
 ## 版面：活动页自己负责滚动
 

@@ -40,8 +40,16 @@ _DEFAULT_PAYLOAD = object()
 
 
 def _submit(client, payload=_DEFAULT_PAYLOAD, *, event_id="spring-2026", **params):
-    """`payload` 用哨兵做默认值，这样显式传 None 才真的发 null。"""
+    """`payload` 用哨兵做默认值，这样显式传 None 才真的发 null。
+
+    `client_id` 默认给一个：匿名提交现在**必须**带它（见
+    `SubmissionService.resolve_submitter`），不给就 422。想测缺它的情形，
+    显式传 `client_id=None`。
+    """
     body = {"name": "张三"} if payload is _DEFAULT_PAYLOAD else payload
+    params.setdefault("client_id", "browser-test")
+    if params.get("client_id") is None:
+        params.pop("client_id")
     return client.post(
         f"{API}/events/{event_id}/submissions",
         json=body,
@@ -66,11 +74,27 @@ def _submit_files(
         ("files", (name, io.BytesIO(content), "application/octet-stream"))
         for name, content in files
     ]
+    params.setdefault("client_id", "browser-test")
+    if params.get("client_id") is None:
+        params.pop("client_id")
     return client.post(
         f"{API}/events/{event_id}/submissions:files",
         data=data,
         files=multipart or None,
         params=params,
+    )
+
+
+def _post(client, event_id, payload, **kwargs):
+    """裸 POST 的包装，用来带自定义头。
+
+    匿名提交现在**必须**带 `client_id`（见 `SubmissionService.resolve_submitter`），
+    所以这里统一补上，免得每个用例都写一遍。
+    """
+    params = dict(kwargs.pop("params", None) or {})
+    params.setdefault("client_id", "browser-test")
+    return client.post(
+        f"{API}/events/{event_id}/submissions", json=payload, params=params, **kwargs
     )
 
 
@@ -286,9 +310,28 @@ class TestSubmitterIdentity:
         assert body["submitter"] == "a:browser-abc"
         assert body["from_authenticated_user"] is False
 
-    def test_anonymous_without_client_id(self, client, test_db) -> None:
+    def test_anonymous_without_client_id_is_rejected(self, client, test_db) -> None:
+        """匿名提交必须带客户端标识。
+
+        少了它，同一活动下**所有**匿名提交都会塌缩成 `a:unknown` 一个提交者：
+        管理端无法区分它们，按提交者做的分组与统计全部失真。与其让数据悄悄变质，
+        不如让调用方立刻知道。
+        """
         _seed_event(test_db)
-        assert _submit(client).json()["submission"]["submitter"] == "a:unknown"
+        response = _submit(client, client_id=None)
+
+        assert response.status_code == 422
+        error = response.json()["error"]
+        assert error["code"] == "validation_failed"
+        assert "client_id" in error["fields"]
+
+        with test_db.session() as session:
+            assert session.scalar(select(func.count()).select_from(Submission)) == 0
+
+    def test_blank_client_id_is_rejected(self, client, test_db) -> None:
+        """空白串与缺失同样不可接受 —— 它一样会塌缩成一个提交者。"""
+        _seed_event(test_db)
+        assert _submit(client, client_id="   ").status_code == 422
 
     def test_ip_is_stored_salted(self, client, test_db) -> None:
         _seed_event(test_db)
@@ -316,15 +359,11 @@ class TestIdempotency:
 
     def test_same_key_returns_original(self, client, test_db) -> None:
         _seed_event(test_db)
-        first = client.post(
-            f"{API}/events/spring-2026/submissions",
-            json={"name": "张三"},
-            headers={"Idempotency-Key": "key-1"},
+        first = _post(
+            client, "spring-2026", {"name": "张三"}, headers={"Idempotency-Key": "key-1"}
         )
-        second = client.post(
-            f"{API}/events/spring-2026/submissions",
-            json={"name": "张三"},
-            headers={"Idempotency-Key": "key-1"},
+        second = _post(
+            client, "spring-2026", {"name": "张三"}, headers={"Idempotency-Key": "key-1"}
         )
 
         assert second.status_code == 201
@@ -336,18 +375,12 @@ class TestIdempotency:
             assert session.scalar(select(func.count()).select_from(Submission)) == 1
 
     def test_retry_does_not_consume_quota(self, client, test_db) -> None:
-        """去重必须在配额之前：否则反复重试会把名额撞满。"""
+        """幂等必须在配额之前：否则反复重试会把名额撞满。"""
         _seed_event(test_db, max_submissions=1)
 
-        client.post(
-            f"{API}/events/spring-2026/submissions",
-            json={"name": "张三"},
-            headers={"Idempotency-Key": "key-1"},
-        )
-        retry = client.post(
-            f"{API}/events/spring-2026/submissions",
-            json={"name": "张三"},
-            headers={"Idempotency-Key": "key-1"},
+        _post(client, "spring-2026", {"name": "张三"}, headers={"Idempotency-Key": "key-1"})
+        retry = _post(
+            client, "spring-2026", {"name": "张三"}, headers={"Idempotency-Key": "key-1"}
         )
 
         assert retry.status_code == 201
@@ -358,70 +391,92 @@ class TestIdempotency:
 
     def test_retry_returns_original_even_when_full(self, client, test_db) -> None:
         _seed_event(test_db, max_submissions=1)
-        first = client.post(
-            f"{API}/events/spring-2026/submissions",
-            json={"a": 1},
-            headers={"Idempotency-Key": "k"},
-        )
+        first = _post(client, "spring-2026", {"a": 1}, headers={"Idempotency-Key": "k"})
         assert first.status_code == 201
 
         # 名额已满，但重试同一幂等键应返回原提交而不是 409
-        retry = client.post(
-            f"{API}/events/spring-2026/submissions",
-            json={"a": 1},
-            headers={"Idempotency-Key": "k"},
-        )
+        retry = _post(client, "spring-2026", {"a": 1}, headers={"Idempotency-Key": "k"})
         assert retry.status_code == 201
         assert retry.json()["submission"]["id"] == first.json()["submission"]["id"]
 
     def test_different_keys_create_independent_rows(self, client, test_db) -> None:
         _seed_event(test_db)
-        # 内容也要不同，否则会被"窗口内相同内容"那条规则拦下
         for key, payload in (("k1", {"n": 1}), ("k2", {"n": 2})):
-            client.post(
-                f"{API}/events/spring-2026/submissions",
-                json=payload,
-                headers={"Idempotency-Key": key},
-            )
+            _post(client, "spring-2026", payload, headers={"Idempotency-Key": key})
         with test_db.session() as session:
             assert session.scalar(select(func.count()).select_from(Submission)) == 2
 
-    def test_content_dedup_without_a_key(self, client, test_db) -> None:
-        """用户连点两下的兜底，不依赖客户端配合。"""
+    def test_identical_content_without_a_key_is_not_deduplicated(
+        self, client, test_db
+    ) -> None:
+        """**刻意不去重。** 理由见 `services/submissions.py`。
+
+        按内容哈希去重不看请求身份、只看内容相似度。重复提交留下两条记录是响亮
+        且可恢复的（管理员看得见、删掉即释放名额），而误判会把用户的提交连同
+        附件一起静默丢弃。这条测试把新行为钉住，免得日后被当成缺陷"修"回去。
+        """
         _seed_event(test_db)
         first = _submit(client, {"name": "张三"})
         second = _submit(client, {"name": "张三"})
 
-        assert second.json()["deduplicated"] is True
-        assert second.json()["submission"]["id"] == first.json()["submission"]["id"]
+        assert first.json()["deduplicated"] is False
+        assert second.json()["deduplicated"] is False
+        assert second.json()["submission"]["id"] != first.json()["submission"]["id"]
 
-    def test_content_dedup_is_scoped_to_the_submitter(self, client, test_db) -> None:
+        with test_db.session() as session:
+            assert session.scalar(select(func.count()).select_from(Submission)) == 2
+
+    def test_corrected_attachment_is_not_swallowed(self, client, test_db) -> None:
+        """移除内容去重的直接动因：字段没改、只换了一个附件。
+
+        旧实现会把这个第二次提交判定为"重复"并丢弃 —— 用户看到"已收到"，
+        以为成功了，而新附件已经没了。这比多一条记录严重得多。
+        """
         _seed_event(test_db)
-        _submit(client, {"name": "张三"}, client_id="browser-a")
-        second = _submit(client, {"name": "张三"}, client_id="browser-b")
+        payload = {"name": "张三"}
 
+        first = _submit_files(
+            client, payload=payload, files=[("photo-a.jpg", b"wrong photo")]
+        )
+        second = _submit_files(
+            client, payload=payload, files=[("photo-b.jpg", b"right photo")]
+        )
+
+        assert first.json()["deduplicated"] is False
         assert second.json()["deduplicated"] is False
 
-    def test_different_content_is_not_deduplicated(self, client, test_db) -> None:
-        _seed_event(test_db)
-        _submit(client, {"name": "张三"})
-        assert _submit(client, {"name": "李四"}).json()["deduplicated"] is False
+        with test_db.session() as session:
+            assert session.scalar(select(func.count()).select_from(Submission)) == 2
+            names = set(
+                session.scalars(select(SubmissionFile.original_name)).all()
+            )
+        assert names == {"photo-a.jpg", "photo-b.jpg"}
 
-    def test_content_dedup_expires(self, client, test_db, monkeypatch) -> None:
+    def test_idempotency_key_is_the_only_dedup(self, client, test_db) -> None:
+        """同一个幂等键才叫重复；不同键、哪怕内容一模一样，也是两次提交。"""
         _seed_event(test_db)
-        monkeypatch.setattr(global_settings, "DEDUP_WINDOW_SECONDS", 0)
-        _submit(client, {"name": "张三"})
-        assert _submit(client, {"name": "张三"}).json()["deduplicated"] is False
+        payload = {"name": "张三"}
+        first = _post(client, "spring-2026", payload, headers={"Idempotency-Key": "intent-1"})
+        replay = _post(client, "spring-2026", payload, headers={"Idempotency-Key": "intent-1"})
+        different_intent = _post(
+            client, "spring-2026", payload, headers={"Idempotency-Key": "intent-2"}
+        )
+
+        assert first.json()["deduplicated"] is False
+        assert replay.json()["deduplicated"] is True
+        assert replay.json()["submission"]["id"] == first.json()["submission"]["id"]
+        assert different_intent.json()["deduplicated"] is False
+
+        with test_db.session() as session:
+            assert session.scalar(select(func.count()).select_from(Submission)) == 2
 
     def test_key_is_scoped_to_the_event(self, client, test_db) -> None:
         _seed_event(test_db, "spring-2026")
         _seed_event(test_db, "autumn-2026")
 
         for event_id in ("spring-2026", "autumn-2026"):
-            response = client.post(
-                f"{API}/events/{event_id}/submissions",
-                json={"a": 1},
-                headers={"Idempotency-Key": "same-key"},
+            response = _post(
+                client, event_id, {"a": 1}, headers={"Idempotency-Key": "same-key"}
             )
             assert response.json()["deduplicated"] is False
 

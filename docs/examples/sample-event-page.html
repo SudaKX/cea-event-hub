@@ -122,6 +122,10 @@
   // 本地储存的 key：只是本活动内的一段命名空间，宿主会加上自己的前缀
   const FORM_KEY = 'signup';
 
+  // 幂等键：标识**一次提交意图**。表单加载时生成一次，成功后重新生成；
+  // 不要在每次点击时新建，否则连点会被当成两次不同的意图。
+  let intentKey = crypto.randomUUID();
+
   function show(text, kind) {
     msg.textContent = text;
     msg.className = 'msg' + (kind ? ' msg--' + kind : '');
@@ -200,8 +204,11 @@
         payload,
         files,
         kind: FORM_KEY,
-        // 幂等键：网络抖动导致重试时，服务端会返回原提交而不是新建一条
-        idempotencyKey: crypto.randomUUID(),
+        // 幂等键标识的是**一次提交意图**，不是一次点击 —— 所以它在上方
+        // （表单加载时）生成一次，成功后重新生成，而不是每次点击都新建。
+        // 每次点击都换新键的话，服务端无从判断两次点击其实是同一次提交，
+        // 幂等键就挡不住连点，只能靠上面禁用按钮。
+        idempotencyKey: intentKey,
         // 真实上传进度：请求由宿主发出，它能拿到 axios 的 onUploadProgress
         // 再回推过来。total 为 null 时（服务端未给总长）只能显示已传字节数。
         onProgress: (loaded, total) => {
@@ -220,6 +227,8 @@
 
       form.reset();
       await CEA.storage.remove(FORM_KEY);
+      // 上一次意图结束了，下一次填写是新的意图
+      intentKey = crypto.randomUUID();
     } catch (error) {
       // 活动页只需判断 code，不必解析 HTTP 状态码
       switch (error.code) {
