@@ -44,6 +44,15 @@ export interface BridgeHostOptions {
   onNavigate?: (to: string) => void
   onToast?: (payload: { level?: string; message: string }) => void
   onTitle?: (title: string) => void
+  /**
+   * 活动页完成握手（发出就绪消息且协议主版本兼容）。
+   *
+   * 与 `onBridgeMissing` 相对：那是"等超时了"，这是"真的连上了"。
+   * 宿主据此收起加载覆盖层 —— 在此之前页面里什么都还没有。
+   *
+   * 可能被调用多次（iframe 内部导航后会重新握手），调用方需要幂等。
+   */
+  onReady?: () => void
   /** 约定时间内没收到就绪消息时触发，用于显示"缺少桥接脚本"诊断 */
   onBridgeMissing?: () => void
   onVersionMismatch?: (declared: number) => void
@@ -196,6 +205,7 @@ export class BridgeHost {
     this.handshakeDone = true
     // 幂等：重复就绪或 iframe 重载后重复下发都不会产生副作用
     this.sendInit()
+    this.options.onReady?.()
   }
 
   private handleNavigate(message: Envelope): void {

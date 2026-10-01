@@ -56,6 +56,7 @@ interface Harness {
   sent: Array<{ type: string; payload: unknown; id?: string }>
   onBridgeMissing: ReturnType<typeof vi.fn>
   onVersionMismatch: ReturnType<typeof vi.fn>
+  onReady: ReturnType<typeof vi.fn>
   onNavigate: ReturnType<typeof vi.fn>
 }
 
@@ -75,6 +76,7 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
 
   const onBridgeMissing = vi.fn()
   const onVersionMismatch = vi.fn()
+  const onReady = vi.fn()
   const onNavigate = vi.fn()
 
   const host = new BridgeHost({
@@ -93,12 +95,21 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
     theme: () => ({ '--bg': '#0b0b0d' }),
     onBridgeMissing,
     onVersionMismatch,
+    onReady,
     onNavigate,
     requestTimeoutMs: 50,
     readyTimeoutMs: 20,
   })
 
-  return { host, iframe, sent, onBridgeMissing, onVersionMismatch, onNavigate }
+  return {
+    host,
+    iframe,
+    sent,
+    onBridgeMissing,
+    onVersionMismatch,
+    onReady,
+    onNavigate,
+  }
 }
 
 function rpc(host: Harness, op: string, args: Record<string, unknown> = {}, id = 'r1'): void {
@@ -178,6 +189,30 @@ describe('握手（任务 13.2）', () => {
     const init = harness.sent.find((message) => message.type === HOST_MESSAGE.INIT)
     expect(init).toBeDefined()
     expect(init?.payload).toMatchObject({ eventId: 'spring-2026' })
+  })
+
+  it('收到就绪后通知 onReady —— 宿主据此收起加载覆盖层', () => {
+    expect(harness.onReady).not.toHaveBeenCalled()
+
+    postFrom(harness.iframe.contentWindow, {
+      v: PROTOCOL_VERSION,
+      type: IFRAME_MESSAGE.READY,
+      payload: { protocolVersion: PROTOCOL_VERSION },
+    })
+
+    expect(harness.onReady).toHaveBeenCalledTimes(1)
+  })
+
+  it('版本不匹配时不通知 onReady', () => {
+    // 版本不兼容等于没连上，覆盖层不该收起
+    postFrom(harness.iframe.contentWindow, {
+      v: PROTOCOL_VERSION,
+      type: IFRAME_MESSAGE.READY,
+      payload: { protocolVersion: PROTOCOL_VERSION + 99 },
+    })
+
+    expect(harness.onVersionMismatch).toHaveBeenCalled()
+    expect(harness.onReady).not.toHaveBeenCalled()
   })
 
   it('重复就绪是幂等的', () => {
