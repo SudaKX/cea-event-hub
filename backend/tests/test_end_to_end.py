@@ -12,7 +12,7 @@ import json
 from sqlalchemy import func, select
 
 from app.core.config import settings as global_settings
-from app.core.enums import EventStatus, UserRole
+from app.core.enums import EventStatus, SubmissionStatus, UserRole
 from app.core.security import hash_password
 from app.db.models import Event, Submission, SubmissionFile, User
 
@@ -359,13 +359,15 @@ class TestFullAdminFlow:
 
         assert (
             admin_client.patch(
-                f"{ADMIN}/submissions/{ids[0]}", json={"status": "accepted"}
+                f"{ADMIN}/submissions/{ids[0]}",
+                json={"status": SubmissionStatus.ACCEPTED.value},
             ).status_code
             == 200
         )
 
         accepted = admin_client.get(
-            f"{ADMIN}/events/spring-2026/submissions", params={"status": "accepted"}
+            f"{ADMIN}/events/spring-2026/submissions",
+            params={"status": SubmissionStatus.ACCEPTED.value},
         ).json()
         assert accepted["total"] == 1
 

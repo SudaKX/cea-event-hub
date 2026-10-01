@@ -31,6 +31,7 @@ vi.mock('@/api/submissions', () => ({
 }))
 
 import EventDetailView from './EventDetailView.vue'
+import { SUBMISSION_STATUS } from '@/domain/submission'
 
 const EVENT = {
   id: 'spring-2026',
@@ -54,7 +55,7 @@ function submission(id: number) {
     kind: 'signup',
     payload: { name: `n${id}` },
     files: [],
-    status: 'received',
+    status: SUBMISSION_STATUS.RECEIVED,
     created_at: '2026-10-01T00:00:00Z',
   }
 }
@@ -181,7 +182,7 @@ describe('提交列表分页', () => {
     reviewSubmission.mockResolvedValue(submission(1))
     const before = getAdminEvent.mock.calls.length
 
-    const accept = wrapper.findAll('button').find((b) => b.text() === '接受')!
+    const accept = wrapper.findAll('button').find((b) => b.text() === '采用')!
     await accept.trigger('click')
     await vi.waitFor(() => expect(reviewSubmission).toHaveBeenCalled())
 

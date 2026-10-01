@@ -268,19 +268,34 @@
   white-space: nowrap;
 }
 
+/*
+  标签配色。后缀来自两处：
+  - 活动状态：draft / live / archived
+  - 提交状态码：ignored(0) / received(1) / accepted(2)，见 domain/submission.ts
+
+  数字不能直接进 class 名，所以状态码先经 statusTone() 映射成词。
+*/
 .tag--live,
 .tag--accepted {
   border-color: var(--red);
   color: var(--red-hi);
 }
 
-.tag--rejected {
+/* 不采用：比"待处理"更弱，用最暗的一档，避免和已采用抢注意力 */
+.tag--ignored {
   border-color: var(--line-strong);
   color: var(--dim);
 }
 
 .tag--draft,
-.tag--reviewing {
+.tag--received,
+.tag--archived {
   border-color: var(--line-strong);
   color: var(--mute);
+}
+
+/* 认不出的码值。看得见异常比看不见好 */
+.tag--unknown {
+  border-color: var(--red);
+  color: var(--red-hi);
 }

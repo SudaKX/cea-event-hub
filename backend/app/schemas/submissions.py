@@ -23,7 +23,8 @@ class SubmissionPublic(BaseModel):
     id: int
     event_id: str
     kind: str
-    status: str
+    #: 审核状态码。取值与含义见 core/enums.py 的 SubmissionStatus
+    status: int
     submitter: str
     #: 是否来自登录用户。管理端据此区分匿名提交，而不必去解析 submitter 前缀
     from_authenticated_user: bool
@@ -54,7 +55,13 @@ class SubmissionListResponse(BaseModel):
 
 
 class SubmissionReviewRequest(BaseModel):
-    status: str
+    """改审核状态。取值必须是 `SubmissionStatus` 里的码值之一。
+
+    这里不写 `Literal`：码值是契约的一部分，而合法集合的定义在枚举里 —— 两处各写
+    一份迟早会漂移。非法值由 service 统一拒绝，错误形状也与其他校验一致。
+    """
+
+    status: int
 
 
 class BatchDeleteRequest(BaseModel):

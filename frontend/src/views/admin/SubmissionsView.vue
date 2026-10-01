@@ -17,18 +17,19 @@ import {
   listEventSubmissions,
   reviewSubmission,
 } from '@/api/submissions'
+import CellValue from '@/components/ui/CellValue.vue'
 import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
+import {
+  SUBMISSION_STATUS,
+  SUBMISSION_STATUS_OPTIONS,
+  parseStatusFilter,
+  payloadDetail,
+  payloadSummary,
+  statusLabel,
+  statusTone,
+} from '@/domain/submission'
 import type { EventAdmin, Submission } from '@/types/api'
-
-/** 提交状态是固定的四档，与后端枚举一致 */
-const STATUS_OPTIONS: SelectOption[] = [
-  { value: '', label: '全部' },
-  { value: 'received', label: 'received' },
-  { value: 'reviewing', label: 'reviewing' },
-  { value: 'accepted', label: 'accepted' },
-  { value: 'rejected', label: 'rejected' },
-]
 
 const events = ref<EventAdmin[]>([])
 const eventId = ref('')
@@ -75,7 +76,7 @@ async function loadSubmissions(): Promise<void> {
   try {
     const result = await listEventSubmissions(eventId.value, {
       kind: kind.value || undefined,
-      status: status.value || undefined,
+      status: parseStatusFilter(status.value),
       page: page.value,
       page_size: pageSize.value,
     })
@@ -96,7 +97,7 @@ async function loadSubmissions(): Promise<void> {
   }
 }
 
-async function onReview(submission: Submission, next: string): Promise<void> {
+async function onReview(submission: Submission, next: number): Promise<void> {
   try {
     await reviewSubmission(submission.id, next)
     await loadSubmissions()
@@ -197,10 +198,9 @@ onMounted(async () => {
       <div class="legend__item">
         <dt class="mono">状态</dt>
         <dd>
-          <span class="tag">received</span> 新提交的初始状态 ·
-          <span class="tag tag--reviewing">reviewing</span> 正在看 ·
-          <span class="tag tag--accepted">accepted</span> 通过 ·
-          <span class="tag tag--rejected">rejected</span> 不通过
+          <span class="tag tag--received">1 待处理</span> 新提交的初始状态 ·
+          <span class="tag tag--accepted">2 已采用</span> 通过 ·
+          <span class="tag tag--ignored">0 不采用</span> 不通过（**不释放名额**）
         </dd>
       </div>
     </dl>
@@ -209,7 +209,7 @@ onMounted(async () => {
 
     <!--
       选择规则：候选项来自数据、数量不可预期时开搜索（活动、分类都是），
-      固定枚举（状态四档）看得完，不必搜。
+      固定枚举（状态三档）看得完，不必搜。
     -->
     <div class="panel filters">
       <Select v-model="eventId" label="活动" :options="eventOptions" searchable />
@@ -221,25 +221,29 @@ onMounted(async () => {
         searchable
       />
 
-      <Select v-model="status" label="状态" :options="STATUS_OPTIONS" />
+      <Select v-model="status" label="状态" :options="SUBMISSION_STATUS_OPTIONS" />
     </div>
 
     <div class="panel">
       <p v-if="loading" class="empty">加载中…</p>
       <p v-else-if="events.length === 0" class="empty">还没有活动。</p>
       <p v-else-if="submissions.length === 0" class="empty">没有符合条件的提交。</p>
-      <table v-else class="table">
+      <!--
+        列宽固定：内容是一段长度不受控的 JSON，不钉死列宽的话某一格会撑开整列，
+        扫读时眼睛找不到列。看不全的内容由 CellValue 的展开入口兜住。
+      -->
+      <table v-else class="table table--fixed">
         <thead>
           <tr>
-            <th />
-            <th>#</th>
-            <th>提交者</th>
-            <th>分类</th>
-            <th>内容</th>
-            <th>附件</th>
-            <th>状态</th>
-            <th>时间</th>
-            <th>操作</th>
+            <th class="col-check" />
+            <th class="col-id">#</th>
+            <th class="col-submitter">提交者</th>
+            <th class="col-kind">分类</th>
+            <th class="col-payload">内容</th>
+            <th class="col-files">附件</th>
+            <th class="col-status">状态</th>
+            <th class="col-time">时间</th>
+            <th class="col-actions">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -257,7 +261,13 @@ onMounted(async () => {
               <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
             </td>
             <td class="num">{{ item.kind }}</td>
-            <td><code class="payload">{{ JSON.stringify(item.payload) }}</code></td>
+            <td>
+              <CellValue
+                :text="payloadSummary(item.payload)"
+                :detail="payloadDetail(item.payload)"
+                label="完整提交内容"
+              />
+            </td>
             <td>
               <a
                 v-for="file in item.files"
@@ -269,22 +279,26 @@ onMounted(async () => {
               </a>
               <span v-if="item.files.length === 0" class="dim">—</span>
             </td>
-            <td><span class="tag" :class="`tag--${item.status}`">{{ item.status }}</span></td>
+            <td>
+              <span class="tag" :class="`tag--${statusTone(item.status)}`">
+                {{ statusLabel(item.status) }}
+              </span>
+            </td>
             <td class="num dim">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</td>
             <td class="actions">
               <button
                 class="btn btn--ghost btn--small"
-                title="标记为通过。只改状态，不删数据、不释放名额。"
-                @click="onReview(item, 'accepted')"
+                title="标记为已采用。只改状态，不删数据、不释放名额。"
+                @click="onReview(item, SUBMISSION_STATUS.ACCEPTED)"
               >
-                接受
+                采用
               </button>
               <button
                 class="btn btn--ghost btn--small"
-                title="标记为不通过。提交仍会留在列表里，仍占用名额；要腾出名额请用「删除」。"
-                @click="onReview(item, 'rejected')"
+                title="标记为不采用。提交仍会留在列表里，仍占用名额；要腾出名额请用「删除」。"
+                @click="onReview(item, SUBMISSION_STATUS.IGNORED)"
               >
-                拒绝
+                不采用
               </button>
               <button
                 class="btn btn--danger btn--small"
@@ -371,17 +385,57 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.payload {
-  display: inline-block;
-  max-width: 300px;
-  overflow-wrap: anywhere;
-  font-size: 12px;
-  color: var(--mute);
+/*
+  固定列宽。`table-layout: fixed` 让宽度只由这些类决定，不再随内容抖动 ——
+  这正是"定宽 + 截断"能成立的前提。内容列拿剩下的空间。
+*/
+.table--fixed {
+  table-layout: fixed;
+}
+
+.col-check {
+  width: 36px;
+}
+
+.col-id {
+  width: 64px;
+}
+
+.col-submitter {
+  width: 168px;
+}
+
+.col-kind {
+  width: 96px;
+}
+
+.col-files {
+  width: 140px;
+}
+
+.col-status {
+  width: 88px;
+}
+
+.col-time {
+  width: 168px;
+}
+
+.col-actions {
+  width: 210px;
+}
+
+/* 固定布局下长串默认会撑破单元格，这里允许它被截断 */
+.table--fixed td {
+  overflow: hidden;
 }
 
 .file-link {
   display: block;
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .actions {

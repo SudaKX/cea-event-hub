@@ -78,11 +78,29 @@ class TestSubmissionListing:
         first = _submit(anon_client, {"n": 1}).json()["submission"]["id"]
         _submit(anon_client, {"n": 2})
 
-        admin_client.patch(f"{ADMIN}/submissions/{first}", json={"status": "accepted"})
+        admin_client.patch(
+            f"{ADMIN}/submissions/{first}",
+            json={"status": SubmissionStatus.ACCEPTED.value},
+        )
         body = admin_client.get(
-            f"{ADMIN}/events/spring-2026/submissions", params={"status": "accepted"}
+            f"{ADMIN}/events/spring-2026/submissions",
+            params={"status": SubmissionStatus.ACCEPTED.value},
         ).json()
         assert body["total"] == 1
+
+        # 另一档也要能筛，否则"按状态筛选"只验了一半
+        pending = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions",
+            params={"status": SubmissionStatus.RECEIVED.value},
+        ).json()
+        assert pending["total"] == 1
+
+        # ignored=0 是最容易被写成"缺省不过滤"的一档
+        ignored = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions",
+            params={"status": SubmissionStatus.IGNORED.value},
+        ).json()
+        assert ignored["total"] == 0
 
     def test_filter_by_submitter(self, admin_client, anon_client, test_db) -> None:
         _seed_event(test_db)
@@ -176,12 +194,12 @@ class TestReview:
     @pytest.mark.parametrize(
         "target",
         [
-            SubmissionStatus.REVIEWING.value,
+            SubmissionStatus.IGNORED.value,
             SubmissionStatus.ACCEPTED.value,
-            SubmissionStatus.REJECTED.value,
+            SubmissionStatus.RECEIVED.value,
         ],
     )
-    def test_status_transitions(self, admin_client, anon_client, test_db, target: str) -> None:
+    def test_status_transitions(self, admin_client, anon_client, test_db, target: int) -> None:
         submission_id = self._one(anon_client, test_db)
         response = admin_client.patch(
             f"{ADMIN}/submissions/{submission_id}", json={"status": target}
@@ -189,10 +207,23 @@ class TestReview:
         assert response.status_code == 200
         assert response.json()["submission"]["status"] == target
 
+    def test_status_codes_are_the_agreed_numbers(self, admin_client, anon_client, test_db) -> None:
+        """码值是对外契约（导出与筛选按它走），所以逐个钉住。
+
+        尤其是 ignored=0：0 在布尔判断里天然表示"否"，改动它会让下游的
+        `if status:` 之类写法集体反转。
+        """
+        assert SubmissionStatus.IGNORED.value == 0
+        assert SubmissionStatus.RECEIVED.value == 1
+        assert SubmissionStatus.ACCEPTED.value == 2
+        # 只有三档，"审核中"已经移除
+        assert len(list(SubmissionStatus)) == 3
+
     def test_records_actor_and_time(self, admin_client, anon_client, test_db, admin_id) -> None:
         submission_id = self._one(anon_client, test_db)
         admin_client.patch(
-            f"{ADMIN}/submissions/{submission_id}", json={"status": "accepted"}
+            f"{ADMIN}/submissions/{submission_id}",
+            json={"status": SubmissionStatus.ACCEPTED.value},
         )
 
         with test_db.session() as session:
@@ -204,21 +235,37 @@ class TestReview:
     def test_invalid_status_is_rejected(self, admin_client, anon_client, test_db) -> None:
         submission_id = self._one(anon_client, test_db)
         response = admin_client.patch(
-            f"{ADMIN}/submissions/{submission_id}", json={"status": "nonsense"}
+            f"{ADMIN}/submissions/{submission_id}", json={"status": 99}
         )
         assert response.status_code == 422
         assert "status" in response.json()["error"]["fields"]
 
-    def test_rejected_submission_stays_in_the_list(self, admin_client, anon_client, test_db) -> None:
+    def test_removed_status_is_rejected(self, admin_client, anon_client, test_db) -> None:
+        """旧字符串值现在必须被拒 —— 它们不再是合法码值。"""
         submission_id = self._one(anon_client, test_db)
-        admin_client.patch(f"{ADMIN}/submissions/{submission_id}", json={"status": "rejected"})
+        for stale in ("reviewing", "rejected", "accepted"):
+            response = admin_client.patch(
+                f"{ADMIN}/submissions/{submission_id}", json={"status": stale}
+            )
+            assert response.status_code == 422, stale
+
+    def test_ignored_submission_stays_in_the_list(self, admin_client, anon_client, test_db) -> None:
+        """标记为不采用**不释放名额** —— 要腾名额得删除。"""
+        submission_id = self._one(anon_client, test_db)
+        admin_client.patch(
+            f"{ADMIN}/submissions/{submission_id}",
+            json={"status": SubmissionStatus.IGNORED.value},
+        )
 
         body = admin_client.get(f"{ADMIN}/events/spring-2026/submissions").json()
         assert body["total"] == 1
 
     def test_unknown_submission_is_404(self, admin_client) -> None:
         assert (
-            admin_client.patch(f"{ADMIN}/submissions/9999", json={"status": "accepted"}).status_code
+            admin_client.patch(
+                f"{ADMIN}/submissions/9999",
+                json={"status": SubmissionStatus.ACCEPTED.value},
+            ).status_code
             == 404
         )
 
@@ -226,7 +273,8 @@ class TestReview:
         submission_id = self._one(anon_client, test_db)
         assert (
             user_client.patch(
-                f"{ADMIN}/submissions/{submission_id}", json={"status": "accepted"}
+                f"{ADMIN}/submissions/{submission_id}",
+                json={"status": SubmissionStatus.ACCEPTED.value},
             ).status_code
             == 403
         )

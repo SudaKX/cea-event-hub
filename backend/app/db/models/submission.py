@@ -57,8 +57,10 @@ class Submission(Base):
     # 客户端提供的幂等键；命中则返回原提交且不消耗配额
     idem_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=SubmissionStatus.RECEIVED.value
+    # 审核状态码。取值见 SubmissionStatus —— 整数而不是字符串，因为导出与筛选
+    # 按这个码值走，而码值是**对外契约**的一部分
+    status: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=SubmissionStatus.RECEIVED.value
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     reviewed_by: Mapped[int | None] = mapped_column(
@@ -93,6 +95,8 @@ class Submission(Base):
             "created_at",
         ),
         Index("ix_submissions_event_id_created_at", "event_id", "created_at"),
+        # 导出与筛选会按状态取一个活动的子集，没有它就得全表扫
+        Index("ix_submissions_event_id_status", "event_id", "status"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

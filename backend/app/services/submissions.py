@@ -338,7 +338,7 @@ class SubmissionService:
         session: Session,
         *,
         submission_id: int,
-        status_value: str,
+        status_value: int,
         actor: User,
     ) -> Submission:
         from app.core.exceptions import NotFound

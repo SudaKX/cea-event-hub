@@ -42,7 +42,13 @@ export interface EventAdmin extends EventPublic {
   updated_at: string
 }
 
-export type SubmissionStatus = 'received' | 'reviewing' | 'accepted' | 'rejected'
+/**
+ * 审核状态码。**码值是对外契约**（导出与筛选按它走），与后端
+ * `core/enums.py` 的 `SubmissionStatus` 一一对应，改一处必须改两处。
+ *
+ * 取值与含义见 `@/domain/submission`。
+ */
+export type SubmissionStatus = number
 
 export interface SubmissionFile {
   id: number

@@ -274,7 +274,7 @@ def list_submissions(
     settings: RuntimeSettings,
     storage: FileStorageDep,
     kind: str | None = None,
-    submission_status: str | None = Query(default=None, alias="status"),
+    submission_status: int | None = Query(default=None, alias="status"),
     submitter: str | None = None,
     created_from: datetime | None = None,
     created_to: datetime | None = None,

@@ -7,8 +7,16 @@ import { ApiError } from '@/api/client'
 import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } from '@/api/events'
 import { deleteSubmission, listEventSubmissions, reviewSubmission } from '@/api/submissions'
 import { attachmentUrl } from '@/api/submissions'
+import CellValue from '@/components/ui/CellValue.vue'
 import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
+import {
+  SUBMISSION_STATUS,
+  payloadDetail,
+  payloadSummary,
+  statusLabel,
+  statusTone,
+} from '@/domain/submission'
 import type { ContentFile, EventAdmin, Submission } from '@/types/api'
 
 const props = defineProps<{ eventId: string }>()
@@ -166,7 +174,7 @@ async function onDeploy(): Promise<void> {
   }
 }
 
-async function onReview(submission: Submission, status: string): Promise<void> {
+async function onReview(submission: Submission, status: number): Promise<void> {
   try {
     await reviewSubmission(submission.id, status)
     // 只改了状态，重取这一页就够了
@@ -302,17 +310,18 @@ watch(
         <h2 class="block__title">提交</h2>
 
         <p v-if="submissions.length === 0" class="empty">还没有提交。</p>
-        <table v-else class="table">
+        <!-- 列宽固定，理由同提交页：内容长度不受控，不钉死列宽会撑开整列 -->
+        <table v-else class="table table--fixed">
           <thead>
             <tr>
-              <th>#</th>
-              <th>提交者</th>
-              <th>分类</th>
-              <th>内容</th>
-              <th>附件</th>
-              <th>状态</th>
-              <th>时间</th>
-              <th>操作</th>
+              <th class="col-id">#</th>
+              <th class="col-submitter">提交者</th>
+              <th class="col-kind">分类</th>
+              <th class="col-payload">内容</th>
+              <th class="col-files">附件</th>
+              <th class="col-status">状态</th>
+              <th class="col-time">时间</th>
+              <th class="col-actions">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -324,8 +333,12 @@ watch(
               </td>
               <td class="num">{{ item.kind }}</td>
               <td>
-                <!-- 按原始键值展示，不假设字段语义 -->
-                <code class="payload">{{ JSON.stringify(item.payload) }}</code>
+                <!-- 按原始键值展示，不假设字段语义；$display 只影响摘要那一行 -->
+                <CellValue
+                  :text="payloadSummary(item.payload)"
+                  :detail="payloadDetail(item.payload)"
+                  label="完整提交内容"
+                />
               </td>
               <td>
                 <a
@@ -338,22 +351,26 @@ watch(
                 </a>
                 <span v-if="item.files.length === 0" class="dim">—</span>
               </td>
-              <td><span class="tag" :class="`tag--${item.status}`">{{ item.status }}</span></td>
+              <td>
+                <span class="tag" :class="`tag--${statusTone(item.status)}`">
+                  {{ statusLabel(item.status) }}
+                </span>
+              </td>
               <td class="num dim">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</td>
               <td class="actions">
                 <button
                   class="btn btn--ghost btn--small"
-                  title="标记为通过。只改状态，不删数据、不释放名额。"
-                  @click="onReview(item, 'accepted')"
+                  title="标记为已采用。只改状态，不删数据、不释放名额。"
+                  @click="onReview(item, SUBMISSION_STATUS.ACCEPTED)"
                 >
-                  接受
+                  采用
                 </button>
                 <button
                   class="btn btn--ghost btn--small"
-                  title="标记为不通过。提交仍会留在列表里，仍占用名额；要腾出名额请用「删除」。"
-                  @click="onReview(item, 'rejected')"
+                  title="标记为不采用。提交仍会留在列表里，仍占用名额；要腾出名额请用「删除」。"
+                  @click="onReview(item, SUBMISSION_STATUS.IGNORED)"
                 >
-                  拒绝
+                  不采用
                 </button>
                 <button
                   class="btn btn--danger btn--small"
@@ -438,17 +455,53 @@ watch(
   border-bottom: 1px solid var(--line);
 }
 
-.payload {
-  display: inline-block;
-  max-width: 320px;
-  overflow-wrap: anywhere;
-  font-size: 12px;
-  color: var(--mute);
+/*
+  固定列宽。`table-layout: fixed` 让宽度只由这些类决定，不再随内容抖动 ——
+  这正是"定宽 + 截断"能成立的前提。内容列拿剩下的空间。
+*/
+.table--fixed {
+  table-layout: fixed;
+}
+
+.col-id {
+  width: 64px;
+}
+
+.col-submitter {
+  width: 168px;
+}
+
+.col-kind {
+  width: 96px;
+}
+
+.col-files {
+  width: 140px;
+}
+
+.col-status {
+  width: 88px;
+}
+
+.col-time {
+  width: 168px;
+}
+
+.col-actions {
+  width: 210px;
+}
+
+/* 固定布局下长串默认会撑破单元格，这里允许它被截断 */
+.table--fixed td {
+  overflow: hidden;
 }
 
 .file-link {
   display: block;
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .actions {

@@ -49,7 +49,7 @@ class SubmissionRepository:
         *,
         event_id: str,
         kind: str | None = None,
-        status: str | None = None,
+        status: int | None = None,
         submitter: str | None = None,
         created_from: datetime | None = None,
         created_to: datetime | None = None,

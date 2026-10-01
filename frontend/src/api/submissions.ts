@@ -76,7 +76,8 @@ export async function mySubmissions(eventId?: string): Promise<Submission[]> {
 
 export interface AdminSubmissionFilters {
   kind?: string
-  status?: string
+  /** 审核状态码，取值见 @/domain/submission */
+  status?: number
   submitter?: string
   page?: number
   page_size?: number
@@ -95,7 +96,7 @@ export async function listEventSubmissions(
 
 export async function reviewSubmission(
   submissionId: number,
-  status: string,
+  status: number,
 ): Promise<Submission> {
   const { data } = await http.patch<{ submission: Submission }>(
     `/admin/submissions/${submissionId}`,
