@@ -5,6 +5,8 @@ import { RouterLink, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } from '@/api/events'
+import Checkbox from '@/components/ui/Checkbox.vue'
+import FileInput from '@/components/ui/FileInput.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import type { ContentFile, EventAdmin } from '@/types/api'
 
@@ -121,11 +123,6 @@ async function onDeleteEvent(): Promise<void> {
   }
 }
 
-function onFileChange(input: Event): void {
-  const target = input.target as HTMLInputElement
-  archive.value = target.files?.[0] ?? null
-}
-
 onMounted(load)
 
 // 路由参数变化时组件会被复用，不监听就会停在上一个活动的数据上
@@ -173,16 +170,26 @@ watch(() => props.eventId, load)
         </label>
 
         <div class="grid">
-          <label class="field field--inline">
-            <input v-model="form.submission_requires_login" type="checkbox" />
-            <span>提交需要登录</span>
-          </label>
-
           <label class="field">
             <span class="field__label">条数上限<span class="dim">（留空取默认）</span></span>
             <input v-model="form.max_submissions" type="number" min="0" />
             <span class="field__hint dim">当前：{{ quotaText }}</span>
           </label>
+
+          <!--
+            复选框自成一行控件：给它一个和输入框等高的行，标签才不会在两列网格里
+            被挤着折行。原来它是裸的 <input>，被 .field input 的 width:100% 撑满，
+            文字只剩几像素。
+          -->
+          <div class="field">
+            <span class="field__label">提交</span>
+            <div class="toggle-row">
+              <Checkbox v-model="form.submission_requires_login" label="提交需要登录" />
+              <span class="toggle-row__text" @click="form.submission_requires_login = !form.submission_requires_login">
+                提交需要登录
+              </span>
+            </div>
+          </div>
         </div>
 
         <button class="btn btn--primary" type="submit" :disabled="busy">保存</button>
@@ -196,7 +203,7 @@ watch(() => props.eventId, load)
         </p>
 
         <div class="row">
-          <input type="file" accept=".zip" @change="onFileChange" />
+          <FileInput v-model="archive" accept=".zip" label="选择 zip" />
           <button class="btn btn--primary" type="button" :disabled="busy || !archive" @click="onDeploy">
             {{ busy ? '投放中…' : '投放' }}
           </button>
@@ -216,14 +223,18 @@ watch(() => props.eventId, load)
         同一份列表放两处，两边迟早会漂移出不一致（筛选、分页、权限各自一套）。
       -->
       <div class="panel block">
-        <h2 class="block__title">提交</h2>
-        <p class="mute block__lead">当前配额：{{ quotaText }}</p>
-        <RouterLink
-          class="btn btn--ghost btn--small"
-          :to="{ name: 'admin-submissions', query: { event: eventId } }"
-        >
-          查看该活动的提交
-        </RouterLink>
+        <div class="block__row">
+          <div class="block__head">
+            <h2 class="block__title">提交</h2>
+            <p class="mute block__lead">当前配额：{{ quotaText }}</p>
+          </div>
+          <RouterLink
+            class="btn btn--ghost btn--control"
+            :to="{ name: 'admin-submissions', query: { event: eventId } }"
+          >
+            查看该活动的提交
+          </RouterLink>
+        </div>
       </div>
     </template>
   </section>
@@ -258,6 +269,44 @@ watch(() => props.eventId, load)
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mute);
+}
+
+/* 标题 + 说明在左、操作在右。按钮与输入框同高，视觉上才压得住这一行 */
+.block__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/*
+  标题与说明之间的行距交给 gap，不用负边距。
+  `.block__lead` 自带的 -6px 是配 `.block` 的 14px 间隙用的（净剩 8px）；搬进这里
+  之后父级不再是那个 flex 容器，负边距直接把两行挤到一起。
+*/
+.block__head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.block__head .block__lead {
+  margin: 0;
+}
+
+/* 复选框那一行要占满输入框的高度，两列网格才对得齐 */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--control-height);
+}
+
+.toggle-row__text {
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
 }
 
 .block__lead {

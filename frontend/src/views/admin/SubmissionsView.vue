@@ -5,22 +5,23 @@
  * 分类标签是自由字段（不做语义校验），因此筛选项由**实际出现过的值**推导，
  * 而不是预设一份清单 —— 平台并不知道各活动会用什么标签。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 import { listAdminEvents } from '@/api/events'
 import {
   attachmentUrl,
-  deleteSubmission,
   deleteSubmissions,
   listEventSubmissions,
-  reviewSubmission,
+  reviewSubmissions,
 } from '@/api/submissions'
 import CellText from '@/components/ui/CellText.vue'
+import Checkbox from '@/components/ui/Checkbox.vue'
 import Modal from '@/components/ui/Modal.vue'
 import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
+import SplitPane from '@/components/ui/SplitPane.vue'
 import {
   SUBMISSION_STATUS,
   SUBMISSION_STATUS_OPTIONS,
@@ -49,6 +50,11 @@ const submissions = ref<Submission[]>([])
 const total = ref(0)
 const selected = ref<Set<number>>(new Set())
 const error = ref('')
+/**
+ * 非错误的提示。现在只有一个来源：批量操作**部分成功** —— 勾选期间有人删掉了
+ * 其中几条。那不是失败，但也不能不说，否则管理员会以为全都改了。
+ */
+const notice = ref('')
 const loading = ref(false)
 
 /** 活动下拉：标识 + 标题，两者都要，光看标识认不出是哪个活动 */
@@ -104,6 +110,8 @@ async function loadSubmissions(): Promise<void> {
     total.value = result.total
     selected.value = new Set()
     error.value = ''
+    // 提示只关于"上一次批量操作"，重新加载就该消失
+    notice.value = ''
 
     // 删到当前页空了就退一页 —— 否则会停在一个已经不存在的页码上，看到一片空白
     if (page.value > pageCount.value) {
@@ -117,53 +125,178 @@ async function loadSubmissions(): Promise<void> {
   }
 }
 
-async function onReview(submission: Submission, next: number): Promise<void> {
-  try {
-    await reviewSubmission(submission.id, next)
-    await loadSubmissions()
-  } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '操作失败'
-  }
+/*
+  待处理队列。
+
+  **只存在内存里，不落库。** 它是一次操作的暂存区：翻页、换筛选都不会丢，刷新或
+  关掉页面就清空。落库反而会带来"上次遗留的队列"这种没人能解释来源的状态。
+
+  它存在的理由正是**跨页累积**：列表一次只显示一页，而"把挑出来的十几条一起采用"
+  是真实需求 —— 光靠勾选做不到，翻页就把勾选丢了。
+*/
+const queue = ref<Submission[]>([])
+
+/** 队列里已有的 id，用来去重与判断"是否已入队" */
+const queuedIds = computed(() => new Set(queue.value.map((item) => item.id)))
+
+/**
+ * 选中项入队。
+ *
+ * 已在队列里的**不重复添加**：跨页挑选时很容易重复点到同一条，重复入队会让
+ * "对队列执行"把同一条处理两次。
+ */
+function enqueue(): void {
+  const additions = submissions.value.filter(
+    (item) => selected.value.has(item.id) && !queuedIds.value.has(item.id),
+  )
+  if (additions.length === 0) return
+  queue.value = [...queue.value, ...additions]
+  // 入队之后清掉勾选：勾选的意义已经完成，留着只会让人以为它们还"待入队"
+  selected.value = new Set()
 }
 
-async function onDelete(submission: Submission): Promise<void> {
-  if (!window.confirm('删除这条提交？名额会立即释放。')) return
-  try {
-    await deleteSubmission(submission.id)
-    await loadSubmissions()
-  } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '删除失败'
-  }
+/** 选中项移出队列 */
+function dequeue(): void {
+  if (selected.value.size === 0) return
+  queue.value = queue.value.filter((item) => !selected.value.has(item.id))
+  selected.value = new Set()
 }
 
-async function onBatchDelete(): Promise<void> {
-  const ids = [...selected.value]
+function dropFromQueue(id: number): void {
+  queue.value = queue.value.filter((item) => item.id !== id)
+}
+
+/** 清空整条队列。攒错了想重来时不必逐条 × */
+function clearQueue(): void {
+  queue.value = []
+}
+
+/**
+ * 对**队列里的全部条目**执行操作。
+ *
+ * 用的是与单条完全相同的接口与错误处理 —— 队列只是一份挑选结果，不该有自己一套
+ * 操作路径。批量端点一次请求搞定，不再是逐条 PATCH。做完就清空：那些条目的目的
+ * 已经达到，留着会显示过期状态。
+ */
+async function onQueueReview(status: number): Promise<void> {
+  const ids = queue.value.map((item) => item.id)
   if (ids.length === 0) return
-  if (!window.confirm(`删除选中的 ${ids.length} 条提交？名额会立即释放。`)) return
+  try {
+    const reviewed = await reviewSubmissions(ids, status)
+    queue.value = []
+    await loadSubmissions()
+    // 勾选期间可能有人删掉了其中几条，数量对不上时说一声，而不是默默少改几条
+    if (reviewed < ids.length) {
+      notice.value = `已处理 ${reviewed} 条，另有 ${ids.length - reviewed} 条已不存在`
+    }
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : '批量改状态失败'
+  }
+}
+
+async function onQueueDelete(): Promise<void> {
+  const ids = queue.value.map((item) => item.id)
+  if (ids.length === 0) return
+  if (!window.confirm(`删除队列里的 ${ids.length} 条提交？名额会立即释放。`)) return
   try {
     await deleteSubmissions(ids)
+    queue.value = []
     await loadSubmissions()
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '批量删除失败'
   }
 }
 
-function toggle(id: number): void {
+/** 侧栏宽度。也只在内存里 —— 它是这一屏的临时布局，不值得持久化 */
+const sideWidth = ref(300)
+
+/** 只在值真的变了才换新 Set，避免无谓的重渲染 */
+function setSelected(id: number, on: boolean): void {
+  if (selected.value.has(id) === on) return
   const next = new Set(selected.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
+  if (on) next.add(id)
+  else next.delete(id)
   selected.value = next
 }
 
+/*
+  按住滑动多选。
+
+  拖动必须由列表统筹 —— 每个复选框并不知道自己的兄弟。状态机按使用者的直觉来定：
+
+    在某一行按下        → armed，记下这次要刷成什么值。**先不进入拖动**
+    按住并离开起点      → dragging。这时才算真的开始滑
+    滑过其它行          → 刷成起点的值
+    松开                → 全部复位
+
+  "按住但没离开起点"就是普通的选中／取消 —— 那一下在按下时已经翻转过了，这里不再
+  做任何事。这样区分的好处是：单击永远不会误触发拖动，拖动只在真的滑起来之后生效。
+*/
+const armed = ref(false)
+const dragging = ref(false)
+const dragValue = ref(false)
+
+/** 按下：记下起点与目标状态，但先不进入拖动 */
+function onPress(value: boolean): void {
+  armed.value = true
+  dragging.value = false
+  dragValue.value = value
+}
+
 /**
- * 点整行看详情。
+ * 按住状态下离开了起点复选框 —— 这时才开始滑。
  *
- * 行内还有复选框与操作按钮，它们有自己的行为 —— 把它们的点击也当成"看详情"会让
- * 勾选或删除的同时弹出一个对话框。所以先判断点到了什么。
+ * 这个处理函数会挂在**每一个**复选框上（`pointerleave` 不冒泡，只能各自听）。
+ * 无妨：`armed` 只在按下到松开之间为真，而那时第一次离开的必然是起点；之后的
+ * 离开只是把已经是 true 的 `dragging` 再置一次。
+ */
+function onLeave(): void {
+  if (armed.value) dragging.value = true
+}
+
+function onDragEnter(id: number): void {
+  // 只在真的滑起来之后才生效。否则鼠标扫过表格就会改动选择
+  if (!dragging.value) return
+  setSelected(id, dragValue.value)
+}
+
+function stopDrag(): void {
+  armed.value = false
+  dragging.value = false
+}
+
+// 指针可能在表格之外松开，所以听 window 而不是表格
+onMounted(() => window.addEventListener('pointerup', stopDrag))
+onBeforeUnmount(() => window.removeEventListener('pointerup', stopDrag))
+
+/**
+ * 行内的复选框、按钮、链接有自己的行为 —— 把它们的点击也当成"选中整行"会让勾选
+ * 一次却翻转两次。所以先判断点到了什么。
+ *
+ * 用 `.checkbox` 这个类而不是 `label` 元素名：复选框的根元素是 div（见 Checkbox
+ * 组件里关于 label 会转发点击的说明），靠元素名判断会漏掉。
+ */
+function onInteractive(target: EventTarget | null): boolean {
+  return Boolean(
+    (target as HTMLElement | null)?.closest('.checkbox, button, a, input, label'),
+  )
+}
+
+/**
+ * 单击选中／取消选中整行。
+ *
+ * **双击会先触发两次 click**，所以"点一下选中、点两下看详情"里，双击的那两下会
+ * 把选中状态翻转两次 —— 净效果是回到原样，然后打开详情。这是这套手势的固有代价；
+ * 想避开只能给单击加延时等待双击，那样每次选择都要卡一下，更糟。
  */
 function onRowClick(event: MouseEvent, item: Submission): void {
-  const target = event.target as HTMLElement | null
-  if (target?.closest('button, a, input, label')) return
+  if (onInteractive(event.target)) return
+  setSelected(item.id, !selected.value.has(item.id))
+}
+
+/** 双击打开详情 */
+function onRowDoubleClick(event: MouseEvent, item: Submission): void {
+  if (onInteractive(event.target)) return
   detail.value = item
 }
 
@@ -220,14 +353,6 @@ onMounted(async () => {
         </h1>
         <p class="mute head__lead">审核与清理。删除会立即释放该活动占用的名额。</p>
       </div>
-      <button
-        class="btn btn--danger btn--small"
-        type="button"
-        :disabled="selected.size === 0"
-        @click="onBatchDelete"
-      >
-        删除选中（{{ selected.size }}）
-      </button>
     </header>
 
     <!--
@@ -256,6 +381,8 @@ onMounted(async () => {
     </Modal>
 
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
+    <!-- 不是错误，但也得说：否则"改了几条"和"点了几条"对不上时没人知道 -->
+    <p v-if="notice" class="ok">{{ notice }}</p>
 
     <!--
       选择规则：候选项来自数据、数量不可预期时开搜索（活动、分类都是），
@@ -274,117 +401,214 @@ onMounted(async () => {
       <Select v-model="status" label="状态" :options="SUBMISSION_STATUS_OPTIONS" />
     </div>
 
-    <div class="panel">
-      <p v-if="loading" class="empty">加载中…</p>
-      <p v-else-if="events.length === 0" class="empty">还没有活动。</p>
-      <p v-else-if="submissions.length === 0" class="empty">没有符合条件的提交。</p>
+    <SplitPane v-model="sideWidth" :min="260" :max="560">
+      <div class="panel">
+        <p v-if="loading" class="empty">加载中…</p>
+        <p v-else-if="events.length === 0" class="empty">还没有活动。</p>
+        <p v-else-if="submissions.length === 0" class="empty">没有符合条件的提交。</p>
       <!--
         列宽固定：内容是一段长度不受控的 JSON，不钉死列宽的话某一格会撑开整列，
-        扫读时眼睛找不到列。看不全的内容由 CellValue 的展开入口兜住。
+        扫读时眼睛找不到列。看不全的内容由点击整行弹出的详情对话框兜住。
+        滚动容器见 .table-scroll —— 它才是"定宽"能成立的前提。
       -->
-      <table v-else class="table table--fixed">
-        <thead>
-          <tr>
-            <th class="col-check" />
-            <th class="col-id">#</th>
-            <th class="col-submitter">提交者</th>
-            <th class="col-kind">分类</th>
-            <th class="col-payload">内容</th>
-            <th class="col-files">附件</th>
-            <th class="col-status">状态</th>
-            <th class="col-time">时间</th>
-            <th class="col-actions">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="item in submissions"
-            :key="item.id"
-            class="row--clickable"
-            @click="onRowClick($event, item)"
-          >
-            <td>
-              <input
-                type="checkbox"
-                :checked="selected.has(item.id)"
-                @change="toggle(item.id)"
-              />
-            </td>
-            <td class="num">
-              <!--
-                编号做成按钮：整行可点只对鼠标友好，键盘用户需要一个真正的控件
-                才能打开详情。它同时是这一行"可点"的可见提示。
-              -->
-              <button class="row-link" type="button" @click="detail = item">
-                {{ item.id }}
-              </button>
-            </td>
-            <td class="num submitter">
-              <!--
-                匿名标识是 `a:<uuid>`，38 个字符，远超这一列宽度，必须截断。
-                标签不能跟着被截 —— 它才是这一列真正要看的信息。
-              -->
-              <CellText class="submitter__id" :text="item.submitter" />
-              <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
-            </td>
-            <td class="num kind-cell">
-              <CellText :text="item.kind" />
-            </td>
-            <td class="payload-cell">
-              <CellText :text="payloadSummary(item.payload)" />
-            </td>
-            <td>
-              <a
-                v-for="file in item.files"
-                :key="file.id"
-                class="mono file-link"
-                :href="attachmentUrl(item.id, file.id)"
+        <div v-else class="table-scroll">
+          <table class="table table--fixed">
+            <thead>
+              <tr>
+                <th class="col-check" />
+                <th class="col-id">#</th>
+                <th class="col-submitter">提交者</th>
+                <th class="col-kind">分类</th>
+                <th class="col-payload">内容</th>
+                <th class="col-files">附件</th>
+                <th class="col-status">状态</th>
+                <th class="col-time">时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="item in submissions"
+                :key="item.id"
+                :class="['row--clickable', { 'row--selected': selected.has(item.id) }]"
+                @click="onRowClick($event, item)"
+                @dblclick="onRowDoubleClick($event, item)"
               >
-                {{ file.original_name }}
-              </a>
-              <span v-if="item.files.length === 0" class="dim">—</span>
-            </td>
-            <td>
+                <td>
+                  <Checkbox
+                    :model-value="selected.has(item.id)"
+                    :label="`选择提交 ${item.id}`"
+                    @update:model-value="(on) => setSelected(item.id, on)"
+                    @press="onPress"
+                    @pointerenter="onDragEnter(item.id)"
+                    @pointerleave="onLeave"
+                  />
+                </td>
+                <td class="num">
+                  <!--
+                    编号做成按钮，作为**键盘可达**的详情入口：整行单击只对鼠标友好，
+                    键盘用户需要一个真正的控件。单击整行则是选中，见 onRowClick。
+                  -->
+                  <button class="row-link" type="button" @click="detail = item">
+                    {{ item.id }}
+                  </button>
+                </td>
+                <!--
+                  外面必须是 <td>，里面再套一层 flex。
+                  直接把 <td> 设成 display:flex 会让它不再是 table-cell，
+                  行分隔线与列对齐会跟着断掉。
+                -->
+                <td class="num">
+                  <div class="submitter">
+                    <!--
+                      匿名标识是 `a:<uuid>`，38 个字符，远超这一列宽度，必须截断。
+                      标签不能跟着被截 —— 它才是这一列真正要看的信息。
+                    -->
+                    <CellText class="submitter__id" :text="item.submitter" />
+                    <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
+                  </div>
+                </td>
+                <td class="num kind-cell">
+                  <CellText :text="item.kind" />
+                </td>
+                <td class="payload-cell">
+                  <CellText :text="payloadSummary(item.payload)" />
+                </td>
+                <td>
+                  <a
+                    v-for="file in item.files"
+                    :key="file.id"
+                    class="mono file-link"
+                    :href="attachmentUrl(item.id, file.id)"
+                  >
+                    {{ file.original_name }}
+                  </a>
+                  <span v-if="item.files.length === 0" class="dim">—</span>
+                </td>
+                <td>
+                  <span class="tag" :class="`tag--${statusTone(item.status)}`">
+                    {{ statusLabel(item.status) }}
+                  </span>
+                </td>
+                <td class="num dim">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!--
+          列表底部**分两行**：操作一行、翻页一行。
+          挤成一行时三个控件组连成一片，"作用于勾选"和"跳到第几页"混在一起读不通。
+          这一行由视图自己渲染而不是塞进 Pager 的插槽 —— 只有这里知道该怎么分行。
+        -->
+        <div class="pick">
+          <span class="num dim pick__count">已选 {{ selected.size }} 行</span>
+          <button
+            class="btn btn--ghost btn--small"
+            type="button"
+            :disabled="selected.size === 0"
+            title="把选中的行加入队列，之后对队列统一处理。翻页、换筛选都不会丢。"
+            @click="enqueue"
+          >
+            放入队列
+          </button>
+          <button
+            class="btn btn--ghost btn--small"
+            type="button"
+            :disabled="selected.size === 0"
+            title="把选中的行移出队列。"
+            @click="dequeue"
+          >
+            移出队列
+          </button>
+        </div>
+
+        <Pager
+          :page="page"
+          :page-size="pageSize"
+          :total="total"
+          @update:page="onPageChange"
+          @update:page-size="onPageSizeChange"
+        />
+      </div>
+
+      <!--
+        右侧面板只放**作用于队列**的东西：队列内容 + 对队列执行的操作。
+        「放入 / 移出队列」作用于勾选、属于当前这一屏，所以留在列表底部的分页栏里
+        —— 摆在哪儿等于声明它管的是哪一片范围。
+      -->
+      <template #side>
+        <div class="panel side">
+          <header class="side__head">
+            <h2 class="side__title">队列<span class="num dim"> · {{ queue.length }}</span></h2>
+            <button
+              v-if="queue.length > 0"
+              class="btn btn--ghost btn--small"
+              type="button"
+              @click="clearQueue"
+            >
+              清空
+            </button>
+          </header>
+
+          <p v-if="queue.length === 0" class="side__empty dim">
+            选中左侧的行后点「放入队列」。<br />
+            翻页、换筛选都不会丢，方便攒够一批再一起处理。
+          </p>
+          <ul v-else class="side__list">
+            <li v-for="item in queue" :key="item.id" class="side__item">
+              <span class="num side__id">#{{ item.id }}</span>
+              <span class="side__who">
+                <CellText :text="payloadSummary(item.payload)" />
+              </span>
               <span class="tag" :class="`tag--${statusTone(item.status)}`">
                 {{ statusLabel(item.status) }}
               </span>
-            </td>
-            <td class="num dim">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</td>
-            <td class="actions">
+              <button
+                class="side__drop"
+                type="button"
+                :aria-label="`把提交 ${item.id} 移出队列`"
+                @click="dropFromQueue(item.id)"
+              >
+                ×
+              </button>
+            </li>
+          </ul>
+
+          <footer class="side__foot">
+            <p class="side__label dim">对队列全部 {{ queue.length }} 条执行</p>
+            <div class="side__row">
               <button
                 class="btn btn--ghost btn--small"
-                title="标记为已采用。只改状态，不删数据、不释放名额。"
-                @click="onReview(item, SUBMISSION_STATUS.ACCEPTED)"
+                type="button"
+                :disabled="queue.length === 0"
+                title="把队列里的提交标为已采用。只改状态，不删数据、不释放名额。"
+                @click="onQueueReview(SUBMISSION_STATUS.ACCEPTED)"
               >
                 采用
               </button>
               <button
                 class="btn btn--ghost btn--small"
-                title="标记为不采用。提交仍会留在列表里，仍占用名额；要腾出名额请用「删除」。"
-                @click="onReview(item, SUBMISSION_STATUS.IGNORED)"
+                type="button"
+                :disabled="queue.length === 0"
+                title="把队列里的提交标为不采用。提交仍在列表里、仍占名额；要腾名额请用「删除」。"
+                @click="onQueueReview(SUBMISSION_STATUS.IGNORED)"
               >
                 不采用
               </button>
               <button
                 class="btn btn--danger btn--small"
-                title="删除该条提交及其附件，并释放一个名额。不可撤销。"
-                @click="onDelete(item)"
+                type="button"
+                :disabled="queue.length === 0"
+                title="删除队列里的提交及其附件，并释放名额。不可撤销。"
+                @click="onQueueDelete"
               >
                 删除
               </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      <Pager
-        :page="page"
-        :page-size="pageSize"
-        :total="total"
-        @update:page="onPageChange"
-        @update:page-size="onPageSizeChange"
-      />
-    </div>
+            </div>
+          </footer>
+        </div>
+      </template>
+    </SplitPane>
 
     <p class="mute foot">
       需要按活动查看策略与内容？<RouterLink to="/admin/events">去活动页</RouterLink>
@@ -483,7 +707,10 @@ onMounted(async () => {
 
 /*
   固定列宽。`table-layout: fixed` 让宽度只由这些类决定，不再随内容抖动 ——
-  这正是"定宽 + 截断"能成立的前提。内容列拿剩下的空间。
+  这正是"定宽 + 截断"能成立的前提。
+
+  内容列**刻意不给宽度**：它拿剩余空间。所以移除操作列之后，多出来的 210px 会
+  自动落到内容列上，不必再调任何数字。
 */
 .table--fixed {
   table-layout: fixed;
@@ -517,24 +744,37 @@ onMounted(async () => {
   width: 168px;
 }
 
-.col-actions {
-  width: 210px;
-}
-
 /* 固定布局下长串默认会撑破单元格，这里允许它被截断 */
 .table--fixed td {
   overflow: hidden;
 }
 
-/* 整行可点：给鼠标用户一个更大的目标，也给"这行有详情"一个视觉暗示 */
+/* 整行可点：单击选中、双击看详情 */
 .row--clickable {
   cursor: pointer;
+}
+
+.row--clickable:hover {
+  background: var(--select-soft);
+}
+
+/* 选中的行要有明确底色，否则点完不知道选中了哪些 */
+.row--selected,
+.row--selected:hover {
+  background: var(--select-soft);
+}
+
+.row--selected .row-link {
+  color: var(--bone);
 }
 
 /*
   提交者那一格：标识占满剩余宽度并被截断，标签保持完整。
   `.submitter__id` 落在子组件根元素上 —— Vue 会把父组件的 scope 属性也加到子组件
   根节点，所以这条规则能生效。
+
+  **flex 必须套在这一层 div 上，不能直接给 `<td>`** —— 那会让它不再是 table-cell，
+  行分隔线与列对齐会跟着断掉。
 */
 .submitter {
   display: flex;
@@ -545,10 +785,6 @@ onMounted(async () => {
 .submitter__id {
   flex: 1;
   min-width: 0;
-}
-
-.row--clickable:hover {
-  background: rgba(255, 255, 255, 0.03);
 }
 
 /* 编号做成按钮，作为键盘可达的入口。去掉按钮的外观，只留可点与焦点态 */
@@ -573,13 +809,135 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.actions {
+/*
+  列表底部的操作行。与下面的分页行由各自的 border-top 分隔 ——
+  两行都贴着一根发丝线，比给它们套一个大边框更像同一块面板里的两层。
+*/
+.pick {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* 计数与两个按钮是一句话，所以整组靠左排，不用 space-between 把它们拉开 */
+.pick__count {
+  margin-right: 4px;
+  font-size: 12.5px;
+}
+
+/* ------------------------------------------------------------------ */
+/* 右侧队列面板                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+  面板自己撑满侧栏高度：列表长了就自己滚，底部的操作区始终留在视野里 ——
+  否则攒了一屏队列之后，"对队列执行"按钮会被顶到看不见的地方。
+*/
+.side {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.side__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.side__title {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.side__empty {
+  margin: 0;
+  padding: 16px 14px;
+  font-size: 12.5px;
+  line-height: 1.9;
+}
+
+.side__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* 只有这一段滚，头尾固定 */
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.side__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+
+.side__id {
+  flex: none;
+  color: var(--dim);
+}
+
+/* 摘要占满中间的剩余宽度并截断 —— 队列要的是"认得出是哪条"，不是看全内容 */
+.side__who {
+  flex: 1;
+  min-width: 0;
+}
+
+.side__drop {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.side__drop:hover {
+  color: var(--red-hi);
+}
+
+.side__foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.side__label {
+  margin: 0;
+  font-size: 12px;
+}
+
+.side__row {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  white-space: nowrap;
 }
 
 .foot {
   font-size: 13px;
 }
 </style>
+

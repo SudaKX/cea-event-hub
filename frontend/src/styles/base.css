@@ -35,6 +35,41 @@ body {
   border-radius: var(--radius-control);
 }
 
+/*
+  滚动条。
+  不设样式的话，暗色界面上会出现一条系统配色的亮条 —— 表格、下拉、对话框都会用
+  到滚动，一处不统一就会在好几处同时刺眼。
+
+  Firefox 走标准属性，Chromium/Safari 走 ::-webkit-scrollbar。两套都要写。
+  滑块用**透明边框 + background-clip**收窄：直接给宽度会连带把轨道也做粗。
+*/
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--radius-control);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--mute);
+  background-clip: content-box;
+}
+
 h1,
 h2,
 h3 {
@@ -103,18 +138,6 @@ pre {
 .grow {
   flex: 1;
   min-width: 0;
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 /* 尊重系统的"减少动效"偏好 */

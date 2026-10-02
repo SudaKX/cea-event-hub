@@ -556,11 +556,11 @@ onBeforeUnmount(() => {
   1. 给尖角让位，否则长文本会钻到它底下
   2. **统一最小高度**。`<button>` 按内容行盒算高、`<input>` 按字体度量算高，
      两者差 1–3px；控件在两者之间切换时，整个控件连同下方内容都会位移一下。
-     用同一个最小高度把这件事钉死：1.5em 行高 + 上下 padding 20px + 上下边框 2px。
+     高度取自 `--control-height`，与输入框、筛选行里的按钮共用同一个值。
   3. 左对齐（按钮默认居中）
 */
 .select__trigger {
-  min-height: calc(1.5em + 22px);
+  min-height: var(--control-height);
   padding-right: 34px;
   text-align: left;
   cursor: pointer;

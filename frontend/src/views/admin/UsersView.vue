@@ -167,79 +167,81 @@ onMounted(load)
         :options="ACTIVE_OPTIONS"
         @update:model-value="reload"
       />
-      <button class="btn btn--ghost btn--small" @click="reload">刷新</button>
+      <button class="btn btn--ghost btn--control" @click="reload">刷新</button>
     </div>
 
     <div class="panel">
       <p v-if="loading" class="empty">加载中…</p>
       <p v-else-if="users.length === 0" class="empty">没有符合条件的用户。</p>
-      <table v-else class="table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>用户名</th>
-            <th>显示名</th>
-            <th>角色</th>
-            <th>状态</th>
-            <th>邮箱</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="user in users" :key="user.id">
-            <td class="num">{{ user.id }}</td>
-            <td class="num">{{ user.username }}</td>
-            <td>{{ user.display_name }}</td>
-            <td><span class="tag" :class="user.role === 'admin' ? 'tag--live' : ''">{{ user.role }}</span></td>
-            <td>
-              <span class="tag" :class="user.is_active ? '' : 'tag--off'">
-                {{ user.is_active ? '启用' : '停用' }}
-              </span>
-            </td>
-            <td class="num dim">
-              {{ user.email ?? '—' }}
-              <span v-if="user.email && !user.email_verified" class="tag">未验证</span>
-            </td>
-            <td class="actions">
-              <button
-                v-if="user.role === 'user'"
-                class="btn btn--ghost btn--small"
-                @click="patch(user, { role: 'admin' })"
-              >
-                提权
-              </button>
-              <button
-                v-else
-                class="btn btn--ghost btn--small"
-                @click="patch(user, { role: 'user' })"
-              >
-                降权
-              </button>
-              <button
-                v-if="user.is_active"
-                class="btn btn--danger btn--small"
-                @click="patch(user, { is_active: false })"
-              >
-                停用
-              </button>
-              <button
-                v-else
-                class="btn btn--ghost btn--small"
-                @click="patch(user, { is_active: true })"
-              >
-                启用
-              </button>
-              <button
-                v-if="user.is_active"
-                class="btn btn--ghost btn--small"
-                @click="issueToken(user)"
-              >
-                重置令牌
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-else class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>用户名</th>
+              <th>显示名</th>
+              <th>角色</th>
+              <th>状态</th>
+              <th>邮箱</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="user in users" :key="user.id">
+              <td class="num">{{ user.id }}</td>
+              <td class="num">{{ user.username }}</td>
+              <td>{{ user.display_name }}</td>
+              <td><span class="tag" :class="user.role === 'admin' ? 'tag--live' : ''">{{ user.role }}</span></td>
+              <td>
+                <span class="tag" :class="user.is_active ? '' : 'tag--off'">
+                  {{ user.is_active ? '启用' : '停用' }}
+                </span>
+              </td>
+              <td class="num dim">
+                {{ user.email ?? '—' }}
+                <span v-if="user.email && !user.email_verified" class="tag">未验证</span>
+              </td>
+              <td class="actions">
+                <button
+                  v-if="user.role === 'user'"
+                  class="btn btn--ghost btn--small"
+                  @click="patch(user, { role: 'admin' })"
+                >
+                  提权
+                </button>
+                <button
+                  v-else
+                  class="btn btn--ghost btn--small"
+                  @click="patch(user, { role: 'user' })"
+                >
+                  降权
+                </button>
+                <button
+                  v-if="user.is_active"
+                  class="btn btn--danger btn--small"
+                  @click="patch(user, { is_active: false })"
+                >
+                  停用
+                </button>
+                <button
+                  v-else
+                  class="btn btn--ghost btn--small"
+                  @click="patch(user, { is_active: true })"
+                >
+                  启用
+                </button>
+                <button
+                  v-if="user.is_active"
+                  class="btn btn--ghost btn--small"
+                  @click="issueToken(user)"
+                >
+                  重置令牌
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <Pager
         :page="page"

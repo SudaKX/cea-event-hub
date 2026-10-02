@@ -5,6 +5,7 @@ import { RouterLink } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 import { createEvent, listAdminEvents } from '@/api/events'
+import Checkbox from '@/components/ui/Checkbox.vue'
 import type { EventAdmin } from '@/types/api'
 
 const events = ref<EventAdmin[]>([])
@@ -114,10 +115,22 @@ onMounted(load)
       </label>
 
       <div class="create__grid">
-        <label class="field field--inline">
-          <input v-model="draft.submission_requires_login" type="checkbox" />
-          <span>提交需要登录</span>
-        </label>
+        <!--
+          复选框自成一行控件。裸的 <input type="checkbox"> 会被 .field input 的
+          width:100% 撑满整行，把标签文字挤到只剩几像素、疯狂折行。
+        -->
+        <div class="field">
+          <span class="field__label">提交</span>
+          <div class="toggle-row">
+            <Checkbox v-model="draft.submission_requires_login" label="提交需要登录" />
+            <span
+              class="toggle-row__text"
+              @click="draft.submission_requires_login = !draft.submission_requires_login"
+            >
+              提交需要登录
+            </span>
+          </div>
+        </div>
 
         <label class="field">
           <span class="field__label">条数上限<span class="dim">（留空取默认）</span></span>
@@ -191,5 +204,19 @@ onMounted(load)
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 14px;
+}
+
+/* 复选框那一行要占满输入框的高度，两列网格才对得齐 */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--control-height);
+}
+
+.toggle-row__text {
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
 }
 </style>

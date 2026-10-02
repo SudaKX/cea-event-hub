@@ -92,10 +92,19 @@
   color: var(--red-hi);
 }
 
-.field input,
+/*
+  复选框与单选框**排除在外**：它们不是文本控件，套上宽度 100% 与内边距会把整行
+  占满，把旁边的标签文字挤到只剩几像素、疯狂折行。
+  `.field--inline` 里的"提交需要登录"就这样坏过。
+
+  textarea 必须留在这条规则里。排除复选框时顺手把它漏掉过一次 —— 它于是丢了背景、
+  边框与内边距，回落到浏览器默认的白底，在暗色界面上格外刺眼。
+*/
+.field input:not([type='checkbox']):not([type='radio']),
 .field select,
 .field textarea,
 .input {
+  min-height: var(--control-height);
   padding: 10px 12px;
   background: var(--bg);
   border: 1px solid var(--line);
@@ -106,13 +115,14 @@
   width: 100%;
 }
 
+/* 放在主规则之后：同优先级下后者胜，于是 90px 覆盖上面的控件高度 */
 .field textarea {
   min-height: 90px;
   resize: vertical;
   font-family: var(--sans);
 }
 
-.field input:focus,
+.field input:not([type='checkbox']):not([type='radio']):focus,
 .field select:focus,
 .field textarea:focus,
 .input:focus {
@@ -120,7 +130,7 @@
   border-color: var(--red-hi);
 }
 
-.field input::placeholder,
+.field input:not([type='checkbox']):not([type='radio'])::placeholder,
 .input::placeholder {
   color: var(--dim);
 }
@@ -135,12 +145,22 @@
 /* 按钮                                                                */
 /* ------------------------------------------------------------------ */
 
+/*
+  文字**必须**用 flex 居中，不能靠内边距。
+  `line-height: 1` 时内容盒只有 13px 高，加上上下 10px 内边距是 35px；而
+  `.btn--control` 的最小高度是 43px —— 多出来的 8px 全部落在下方，文字看起来偏高。
+  flex 居中与具体高度无关，换高度也不会再错位。
+*/
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 10px 16px;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
   font: 600 13px/1 var(--sans);
   letter-spacing: 0.04em;
+  text-align: center;
   cursor: pointer;
   transition:
     background var(--transition-fast),
@@ -180,6 +200,15 @@
 .btn--small {
   padding: 6px 10px;
   font-size: 12px;
+}
+
+/*
+  与输入框、下拉并排的按钮用这一档 —— 高度由令牌统一，不是各写各的内边距。
+  筛选行里的「刷新」原来用小按钮（27px），和旁边 43px 的输入框并排明显矮一截。
+*/
+.btn--control {
+  min-height: var(--control-height);
+  padding: 10px 16px;
 }
 
 .btn:disabled {
@@ -244,6 +273,27 @@
 
 .table tbody tr:hover {
   background: rgba(255, 255, 255, 0.02);
+}
+
+/*
+  表格的滚动容器。**只有横向滚动。**
+
+  横向是必需的：表头列宽固定（各视图的 .col-* ），合计一千多像素。窗口比这窄时，
+  `table-layout: fixed` 会去压缩列宽，于是"定宽 + 截断"整套失效 —— 内容重新开始
+  撑列。让表格保持最小宽度、由外层横向滚动，才是那个设计的成立条件。
+
+  纵向**刻意不做**。加过一版 `max-height: 70vh`，结果表格内外各一条滚动条：70vh
+  只算表格自己，页面还要装页头、筛选、分页器，于是页面也滚 —— 两条滚动条比多滚
+  几下烦人得多。而且 `overflow-x: auto` 会让 `position: sticky` 相对这个盒子生效
+  而不是视口，**表头吸顶在这个结构里根本实现不了**，不值得为它换两条滚动条。
+  纵向交给页面，全站只有一条。
+*/
+.table-scroll {
+  overflow: auto;
+}
+
+.table-scroll .table--fixed {
+  min-width: 1120px;
 }
 
 .table td.num,

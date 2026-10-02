@@ -63,18 +63,44 @@ async function onSignOut(): Promise<void> {
     </aside>
 
     <main class="shell__main">
-      <RouterView />
+      <!--
+        多这一层是为了让**内容滚而不是整页滚**：`.shell__main` 自己裁掉溢出，
+        滚动条出现在这一层里，左侧导航因此始终停在原地。
+        内边距也放在这一层 —— 放在外面的话，滚动条会跑到视口最右边，
+        与内容之间隔着一段空白。
+      -->
+      <div class="shell__scroll">
+        <RouterView />
+      </div>
     </main>
   </div>
 </template>
 
 <style scoped>
+/*
+  固定视口高度，整页不滚。
+
+  `height: 100%` + `overflow: hidden` 取代了原来的 `min-height: 100%` —— 后者让
+  外壳跟着内容一起长高，于是滚动发生在**页面**上：左侧导航会跟着一起滚走，右侧
+  再多出滚动条。
+
+  **`grid-template-rows` 不能省。** 只定义列的话那一行是隐式的 `auto` 行，会跟着
+  内容长高：格子里的 `.shell__scroll` 于是也变成内容那么高（比如 1000px），再被
+  外壳的高度裁掉 —— 表现是内容被截断**而且滚不动**，因为滚动层自己就比可视区高。
+  `minmax(0, 1fr)` 把这一行钉死在外壳的高度上，内层才真的能滚。
+*/
 .shell {
   display: grid;
   grid-template-columns: 232px 1fr;
-  min-height: 100%;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  overflow: hidden;
 }
 
+/*
+  左侧不滚动。它装的是品牌、三个导航项和一行用户信息，正常窗口高度下绰绰有余；
+  裁掉溢出比让它自己滚更符合"导航始终在同一个位置"的预期。
+*/
 .shell__side {
   display: flex;
   flex-direction: column;
@@ -82,6 +108,7 @@ async function onSignOut(): Promise<void> {
   padding: 22px 18px;
   border-right: 1px solid var(--line);
   background: var(--panel);
+  overflow: hidden;
 }
 
 .shell__brand {
@@ -154,19 +181,51 @@ async function onSignOut(): Promise<void> {
   font-size: 13px;
 }
 
+/*
+  `min-height: 0` 不能少：grid 子项默认 `min-height: auto`，会被内容顶高，
+  于是这一格跟着内容一起长，内层就再也滚不起来了。
+*/
 .shell__main {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 真正滚动的那一层 */
+.shell__scroll {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 26px 28px 48px;
 }
 
 @media (max-width: 720px) {
+  /*
+    窄屏改成上下堆叠：导航占满一屏宽，主区在下面。这时内层再滚会变成两个窄条，
+    所以退回整页滚动 —— 布局换了，滚动的归属也该跟着换。
+  */
   .shell {
     grid-template-columns: 1fr;
+    /* 上下堆叠是两行，行高各自按内容算，整页滚动 */
+    grid-template-rows: auto;
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
   }
 
   .shell__side {
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    overflow: visible;
+  }
+
+  .shell__main {
+    overflow: visible;
+  }
+
+  .shell__scroll {
+    height: auto;
+    overflow: visible;
   }
 }
 </style>
