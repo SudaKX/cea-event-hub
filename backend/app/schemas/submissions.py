@@ -69,6 +69,17 @@ class BatchDeleteRequest(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=500)
 
 
+class BatchReviewRequest(BaseModel):
+    """批量改审核状态。
+
+    码值的合法集合在 `SubmissionStatus` 里，由 service 统一拒绝非法值 ——
+    这里不重复写一份，两处定义迟早漂移。
+    """
+
+    ids: list[int] = Field(min_length=1, max_length=500)
+    status: int
+
+
 def file_to_public(record: SubmissionFile, mime: str | None = None) -> SubmissionFilePublic:
     return SubmissionFilePublic(
         id=record.id,
@@ -100,6 +111,7 @@ def submission_to_public(
 
 __all__ = [
     "BatchDeleteRequest",
+    "BatchReviewRequest",
     "SubmissionCreated",
     "SubmissionEnvelope",
     "SubmissionFilePublic",

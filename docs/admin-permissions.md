@@ -48,6 +48,7 @@
 | 下载任意附件 | 同上 | x | x | o |
 | 提交列表与筛选 | `GET /admin/events/{id}/submissions` | x | x | o |
 | 审核（变更状态） | `PATCH /admin/submissions/{id}` | x | x | o |
+| 批量审核 | `POST /admin/submissions:review` | x | x | o |
 | 删除提交 | `DELETE /admin/submissions/{id}` | x | x | o |
 | 批量删除 | `POST /admin/submissions:delete` | x | x | o |
 

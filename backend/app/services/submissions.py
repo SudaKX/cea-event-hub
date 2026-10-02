@@ -355,6 +355,41 @@ class SubmissionService:
         submission.reviewed_by = actor.id
         return submission
 
+    def review_many(
+        self,
+        session: Session,
+        *,
+        submission_ids: Sequence[int],
+        status_value: int,
+        actor: User,
+    ) -> int:
+        """批量改审核状态，返回实际改动的条数。
+
+        与单条 `review` 的区别只有两点，都是"批量"本身带来的：
+
+        1. 状态**只校验一次**，而不是每条都查一遍合法集合
+        2. 用一次 `IN` 查询取回全部，而不是循环 `get`
+
+        **找不到的 id 直接跳过，不报错。** 与 `delete_many` 一致：批量操作多半是
+        "管理员勾了一批、期间有人删掉了其中一条"，为了那一条让整批失败，管理员
+        无从判断到底哪条出了问题，只能重试。
+        """
+        if not submission_ids:
+            return 0
+
+        if status_value not in {s.value for s in SubmissionStatus}:
+            raise ValidationFailed(fields={"status": "状态取值不合法"})
+
+        rows = self.submissions.list_by_ids(session, submission_ids)
+        now = utcnow()
+        for submission in rows:
+            submission.status = status_value
+            submission.reviewed_at = now
+            submission.reviewed_by = actor.id
+
+        session.flush()
+        return len(rows)
+
     def delete_submission(self, session: Session, *, submission_id: int) -> Submission:
         """删除一条提交，并在**同一事务内**释放它占用的名额。
 

@@ -117,6 +117,20 @@ export async function deleteSubmissions(ids: number[]): Promise<number> {
 }
 
 /**
+ * 批量改审核状态。
+ *
+ * 返回**实际改动的条数**：勾选期间被别处删掉的那些会被跳过，所以这个数可能小于
+ * 传入的 id 数量 —— 调用方据此知道结果与预期是否一致。
+ */
+export async function reviewSubmissions(ids: number[], status: number): Promise<number> {
+  const { data } = await http.post<{ reviewed: number }>('/admin/submissions:review', {
+    ids,
+    status,
+  })
+  return data.reviewed
+}
+
+/**
  * 附件下载地址。
  *
  * 指向鉴权端点而不是 `/data/**` —— 后者从不对外提供，这是唯一的读取路径。

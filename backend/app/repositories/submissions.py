@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import Select, delete, func, select
@@ -13,6 +14,22 @@ from app.db.models import Submission, SubmissionFile
 class SubmissionRepository:
     def get(self, session: Session, submission_id: int) -> Submission | None:
         return session.get(Submission, submission_id)
+
+    def list_by_ids(
+        self, session: Session, submission_ids: Sequence[int]
+    ) -> list[Submission]:
+        """一次取回多条。
+
+        批量端点存在的意义就是省掉逐条往返 —— 循环里调 `get` 的话，
+        "批量"只是把 N 次请求换成了 N 次查询，没省下什么。
+        """
+        if not submission_ids:
+            return []
+        return list(
+            session.scalars(
+                select(Submission).where(Submission.id.in_(list(submission_ids)))
+            ).all()
+        )
 
     def add(self, session: Session, submission: Submission) -> Submission:
         session.add(submission)

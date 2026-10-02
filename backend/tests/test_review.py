@@ -6,7 +6,7 @@ import io
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from app.core.clock import utcnow
 from app.core.enums import EventStatus, SubmissionStatus, UserRole
@@ -278,6 +278,156 @@ class TestReview:
             ).status_code
             == 403
         )
+
+
+class TestBatchReview:
+    """批量改审核状态。
+
+    这个端点存在的唯一理由是**省掉逐条往返**：管理端会把跨页挑选的条目攒成队列
+    再统一处理，逐条 PATCH 就是几十个请求。所以下面除了行为，还专门数了 SQL 语句
+    —— 如果实现退化成循环 `get`，"批量"就只剩名字了。
+    """
+
+    def _ids(self, anon_client, test_db, count: int) -> list[int]:
+        _seed_event(test_db)
+        return [
+            _submit(anon_client, {"n": index}).json()["submission"]["id"]
+            for index in range(count)
+        ]
+
+    def _statuses(self, test_db, ids: list[int]) -> dict[int, int]:
+        with test_db.session() as session:
+            return {
+                row.id: row.status for row in session.scalars(
+                    select(Submission).where(Submission.id.in_(ids))
+                )
+            }
+
+    def test_reviews_every_listed_submission(self, admin_client, anon_client, test_db) -> None:
+        ids = self._ids(anon_client, test_db, 4)
+
+        response = admin_client.post(
+            f"{ADMIN}/submissions:review",
+            json={"ids": ids[:3], "status": SubmissionStatus.ACCEPTED.value},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["reviewed"] == 3
+
+        statuses = self._statuses(test_db, ids)
+        assert statuses[ids[0]] == SubmissionStatus.ACCEPTED.value
+        assert statuses[ids[1]] == SubmissionStatus.ACCEPTED.value
+        assert statuses[ids[2]] == SubmissionStatus.ACCEPTED.value
+        # 没在列表里的那条不受影响
+        assert statuses[ids[3]] == SubmissionStatus.RECEIVED.value
+
+    def test_unknown_ids_are_skipped_not_fatal(
+        self, admin_client, anon_client, test_db
+    ) -> None:
+        """勾选期间被别处删掉的那些跳过即可。
+
+        为了其中一条让整批失败，管理员无从判断是哪条出了问题，只能重试 ——
+        与 `:delete` 的处理一致。
+        """
+        ids = self._ids(anon_client, test_db, 1)
+
+        response = admin_client.post(
+            f"{ADMIN}/submissions:review",
+            json={"ids": [*ids, 9999], "status": SubmissionStatus.IGNORED.value},
+        )
+
+        assert response.status_code == 200
+        # 返回的是**实际改动数**，调用方据此知道结果与预期不一致
+        assert response.json()["reviewed"] == 1
+        assert self._statuses(test_db, ids)[ids[0]] == SubmissionStatus.IGNORED.value
+
+    def test_records_actor_and_time(self, admin_client, anon_client, test_db, admin_id) -> None:
+        ids = self._ids(anon_client, test_db, 2)
+
+        admin_client.post(
+            f"{ADMIN}/submissions:review",
+            json={"ids": ids, "status": SubmissionStatus.ACCEPTED.value},
+        )
+
+        with test_db.session() as session:
+            rows = session.scalars(select(Submission).where(Submission.id.in_(ids))).all()
+        assert all(row.reviewed_by == admin_id for row in rows)
+        assert all(row.reviewed_at is not None for row in rows)
+
+    def test_batch_leaves_the_quota_alone(self, admin_client, anon_client, test_db) -> None:
+        """改状态不释放名额 —— 要腾名额得删除。"""
+        ids = self._ids(anon_client, test_db, 3)
+        with test_db.session() as session:
+            before = session.get(Event, "spring-2026").submission_count
+
+        admin_client.post(
+            f"{ADMIN}/submissions:review",
+            json={"ids": ids, "status": SubmissionStatus.IGNORED.value},
+        )
+
+        with test_db.session() as session:
+            assert session.get(Event, "spring-2026").submission_count == before
+
+    def test_uses_one_select_for_all_of_them(
+        self, admin_client, anon_client, test_db
+    ) -> None:
+        """取回 N 条只用一次 `IN` 查询。
+
+        循环 `get` 的话这里会看到 N 条 SELECT —— 那样"批量"只是把 N 次请求换成了
+        N 次查询，端点就白加了。
+        """
+        ids = self._ids(anon_client, test_db, 5)
+        statements: list[str] = []
+
+        def record(conn, cursor, statement, parameters, context, executemany) -> None:
+            statements.append(statement)
+
+        event.listen(test_db.engine, "before_cursor_execute", record)
+        try:
+            response = admin_client.post(
+                f"{ADMIN}/submissions:review",
+                json={"ids": ids, "status": SubmissionStatus.ACCEPTED.value},
+            )
+        finally:
+            event.remove(test_db.engine, "before_cursor_execute", record)
+
+        assert response.status_code == 200
+        on_submissions = [
+            sql for sql in statements if "FROM submissions" in sql or "from submissions" in sql
+        ]
+        assert len(on_submissions) == 1, on_submissions
+
+    def test_invalid_status_is_rejected_once(self, admin_client, anon_client, test_db) -> None:
+        ids = self._ids(anon_client, test_db, 3)
+
+        response = admin_client.post(
+            f"{ADMIN}/submissions:review", json={"ids": ids, "status": 99}
+        )
+
+        assert response.status_code == 422
+        assert "status" in response.json()["error"]["fields"]
+        # 一条都不该被改动
+        assert set(self._statuses(test_db, ids).values()) == {SubmissionStatus.RECEIVED.value}
+
+    def test_rejects_empty_id_list(self, admin_client) -> None:
+        response = admin_client.post(
+            f"{ADMIN}/submissions:review", json={"ids": [], "status": 2}
+        )
+        assert response.status_code == 422
+
+    def test_rejects_oversized_id_list(self, admin_client) -> None:
+        # 上限存在的意义是让一次请求的代价可预期
+        response = admin_client.post(
+            f"{ADMIN}/submissions:review",
+            json={"ids": list(range(1, 502)), "status": 2},
+        )
+        assert response.status_code == 422
+
+    def test_plain_user_is_403(self, user_client) -> None:
+        response = user_client.post(
+            f"{ADMIN}/submissions:review", json={"ids": [1], "status": 2}
+        )
+        assert response.status_code == 403
 
 
 class TestDeletion:

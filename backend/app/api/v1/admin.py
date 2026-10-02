@@ -52,6 +52,7 @@ from app.schemas.events import (
 )
 from app.schemas.submissions import (
     BatchDeleteRequest,
+    BatchReviewRequest,
     SubmissionEnvelope,
     SubmissionListResponse,
     SubmissionReviewRequest,
@@ -344,6 +345,35 @@ def delete_submission(
     )
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
+
+
+@router.post(
+    "/submissions:review",
+    status_code=status.HTTP_200_OK,
+    summary="批量改审核状态",
+)
+def review_submissions(
+    payload: BatchReviewRequest,
+    session: DbSession,
+    admin: AdminUser,
+    settings: RuntimeSettings,
+    storage: FileStorageDep,
+) -> dict[str, int]:
+    """一次请求改一批状态。
+
+    与 `:delete` 对称。存在的意义是省掉逐条往返：管理端会把跨页挑选的条目攒成一条
+    队列再统一处理，逐条 PATCH 的话那就是几十个请求，而它们本该是一次事务。
+
+    返回**实际改动的条数**：勾选期间被别处删掉的那些会被跳过，调用方据此知道
+    结果与预期是否一致。
+    """
+    reviewed = _submission_service(settings, storage).review_many(
+        session,
+        submission_ids=payload.ids,
+        status_value=payload.status,
+        actor=admin,
+    )
+    return {"reviewed": reviewed}
 
 
 @router.post(
