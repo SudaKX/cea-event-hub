@@ -183,11 +183,19 @@ describe('控件高度统一', () => {
     expect(controlBtn).toContain('var(--control-height)')
   })
 
-  it('筛选行里的刷新按钮用的是这一档，而不是小按钮', () => {
+  it('筛选行里的查询按钮用的是这一档，而不是小按钮', () => {
+    /*
+      筛选面板现在是嵌套结构（外层 .filters，里面两行 .filters__row），所以不能
+      用非贪婪匹配到第一个 `</div>` —— 那会在第一行结束时就截断。
+      这里按"从 .filters 开始到 .pick 之前"取，`.pick` 是列表底部那一行。
+    */
     const usersView = readFileSync(resolve(srcDir, 'views/admin/UsersView.vue'), 'utf-8')
-    const filterRow = /<div class="panel filters">[\s\S]*?<\/div>/.exec(usersView)?.[0] ?? ''
+    const start = usersView.indexOf('<div class="panel filters">')
+    const end = usersView.indexOf('<div class="pick">')
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
 
-    expect(filterRow.length).toBeGreaterThan(0)
+    const filterRow = usersView.slice(start, end)
     expect(filterRow).toContain('btn--control')
     expect(filterRow).not.toContain('btn--small')
   })

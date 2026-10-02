@@ -656,6 +656,264 @@ class TestDeletion:
         assert user_client.delete(f"{ADMIN}/submissions/{submission_id}").status_code == 403
 
 
+class TestUserBulk:
+    """批量改用户角色与启用状态。
+
+    这个类里最重要的一条是 `test_cannot_demote_all_admins_at_once` —— 它覆盖的
+    正是"逐个检查最后一个管理员"会漏掉的那个漏洞。
+    """
+
+    def _seed_user(self, test_db, username="alice", **overrides) -> int:
+        defaults: dict[str, object] = {
+            "username": username,
+            "display_name": username,
+            "password_hash": hash_password("correct-horse"),
+            "role": UserRole.USER.value,
+        }
+        defaults.update(overrides)
+        with test_db.session() as session:
+            user = User(**defaults)  # type: ignore[arg-type]
+            session.add(user)
+            session.flush()
+            return user.id
+
+    def _users(self, test_db, ids: list[int]) -> dict[int, User]:
+        with test_db.session() as session:
+            return {row.id: row for row in session.scalars(select(User).where(User.id.in_(ids)))}
+
+    def test_promotes_several_users_at_once(self, admin_client, test_db) -> None:
+        ids = [self._seed_user(test_db, name) for name in ("alice", "bob", "carol")]
+
+        response = admin_client.post(f"{ADMIN}/users:bulk", json={"ids": ids, "role": "admin"})
+
+        assert response.status_code == 200
+        assert response.json()["updated"] == 3
+        assert all(user.role == "admin" for user in self._users(test_db, ids).values())
+
+    def test_disables_several_users_at_once(self, admin_client, test_db) -> None:
+        ids = [self._seed_user(test_db, name) for name in ("alice", "bob")]
+
+        response = admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": ids, "is_active": False}
+        )
+
+        assert response.json()["updated"] == 2
+        assert not any(user.is_active for user in self._users(test_db, ids).values())
+
+    def test_role_and_active_together(self, admin_client, test_db) -> None:
+        ids = [self._seed_user(test_db, "alice")]
+
+        admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": ids, "role": "admin", "is_active": False}
+        )
+
+        user = self._users(test_db, ids)[ids[0]]
+        assert (user.role, user.is_active) == ("admin", False)
+
+    def test_cannot_demote_all_admins_at_once(self, admin_client, admin_id, test_db) -> None:
+        """一次把全部管理员降级必须被拒。
+
+        逐个调用 `set_role` 的实现会放过它：第一次检查看到"还有另一个管理员在"
+        （通过），第二次检查时第一次的改动还没落库、同样通过 —— 结果一个管理员
+        都不剩，系统永久失去管理能力。
+        """
+        other_id = self._seed_user(test_db, "bob", role=UserRole.ADMIN.value)
+
+        response = admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": [admin_id, other_id], "role": "user"}
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "last_admin_protected"
+        # 一条都不该被改动
+        assert self._users(test_db, [admin_id, other_id])[admin_id].role == "admin"
+        assert self._users(test_db, [admin_id, other_id])[other_id].role == "admin"
+
+    def test_disabling_one_of_two_admins_is_allowed(
+        self, admin_client, admin_id, test_db
+    ) -> None:
+        """边界要准：还剩一个可用管理员时应当允许。
+
+        顺带说明一件事：**"停用最后一个管理员"这条路径通过接口是走不到的** ——
+        想停用最后一个管理员就得把自己也列进去，而那会先撞上"不能停用自己的账号"
+        （`AdminUser` 依赖本身就拒绝停用中的账号，所以操作者必然是个在岗管理员）。
+        服务层那条判断因此是防御性的，见下面的服务层用例。
+        """
+        other_id = self._seed_user(test_db, "bob", role=UserRole.ADMIN.value)
+
+        response = admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": [other_id], "is_active": False}
+        )
+
+        assert response.status_code == 200
+        assert self._users(test_db, [other_id])[other_id].is_active is False
+
+    def test_demoting_one_of_two_admins_is_fine(self, admin_client, admin_id, test_db) -> None:
+        # 边界要准：还剩一个可用管理员时应当允许
+        other_id = self._seed_user(test_db, "bob", role=UserRole.ADMIN.value)
+
+        response = admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": [other_id], "role": "user"}
+        )
+
+        assert response.status_code == 200
+        assert self._users(test_db, [other_id])[other_id].role == "user"
+
+    def test_inactive_admin_does_not_count_as_remaining(
+        self, admin_client, admin_id, test_db
+    ) -> None:
+        """停用的管理员不算"可用"，所以不能靠它兜底。
+
+        先降掉唯一在岗的那个，剩下的那个虽然是 admin 但处于停用状态 —— 结果仍是
+        零个可用管理员，必须被拒。
+        """
+        sleeping = self._seed_user(test_db, "bob", role=UserRole.ADMIN.value, is_active=False)
+
+        # admin 自己是唯一在岗的管理员，降掉他应当被拒
+        response = admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": [admin_id, sleeping], "role": "user"}
+        )
+        assert response.status_code == 409
+
+    def test_cannot_disable_self_in_a_batch(self, admin_client, admin_id, test_db) -> None:
+        other_id = self._seed_user(test_db, "alice")
+
+        response = admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": [admin_id, other_id], "is_active": False}
+        )
+
+        assert response.status_code == 400
+        # 整批都不生效，而不是"改了一半才发现自己在名单里"
+        assert self._users(test_db, [other_id])[other_id].is_active is True
+
+    def test_unknown_ids_are_skipped(self, admin_client, test_db) -> None:
+        user_id = self._seed_user(test_db, "alice")
+
+        response = admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": [user_id, 9999], "role": "admin"}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["updated"] == 1
+
+    def test_revokes_sessions_on_any_role_change(
+        self, admin_client, user_client, test_db
+    ) -> None:
+        """角色一变就吊销会话 —— **提升也一样**。
+
+        单条 `set_role` 就是这么做的（对任何角色变更都吊销），批量保持一致：权限
+        刚变化的那个瞬间，旧会话代表的还是旧权限，留着它等于让"降级立即生效"这句
+        话有一半不成立。
+        """
+        with test_db.session() as session:
+            alice_id = session.scalar(select(User.id).where(User.username == "alice"))
+        assert alice_id is not None
+
+        admin_client.post(f"{ADMIN}/users:bulk", json={"ids": [alice_id], "role": "admin"})
+
+        # 提升之后旧 Cookie 已失效，得重新登录才拿到管理权限
+        assert user_client.get(f"{ADMIN}/users").status_code == 401
+        assert (
+            user_client.post(
+                "/api/v1/auth/login",
+                json={"username": "alice", "password": "correct-horse"},
+            ).status_code
+            == 200
+        )
+        assert user_client.get(f"{ADMIN}/users").status_code == 200
+
+        admin_client.post(f"{ADMIN}/users:bulk", json={"ids": [alice_id], "role": "user"})
+
+        # 降级同样吊销：旧会话不能再访问管理接口
+        assert user_client.get(f"{ADMIN}/users").status_code == 401
+
+    def test_rejects_empty_id_list(self, admin_client) -> None:
+        assert (
+            admin_client.post(f"{ADMIN}/users:bulk", json={"ids": [], "role": "user"}).status_code
+            == 422
+        )
+
+    def test_rejects_a_request_that_changes_nothing(self, admin_client, test_db) -> None:
+        # 两个字段都不给就没有可执行的动作，与其静默成功不如拒绝
+        user_id = self._seed_user(test_db, "alice")
+        assert (
+            admin_client.post(f"{ADMIN}/users:bulk", json={"ids": [user_id]}).status_code == 422
+        )
+
+    def test_rejects_oversized_id_list(self, admin_client) -> None:
+        response = admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": list(range(1, 202)), "role": "user"}
+        )
+        assert response.status_code == 422
+
+    def test_rejects_invalid_role(self, admin_client, test_db) -> None:
+        user_id = self._seed_user(test_db, "alice")
+        response = admin_client.post(
+            f"{ADMIN}/users:bulk", json={"ids": [user_id], "role": "superuser"}
+        )
+        assert response.status_code == 400
+
+    def test_plain_user_is_403(self, user_client) -> None:
+        assert (
+            user_client.post(f"{ADMIN}/users:bulk", json={"ids": [1], "role": "user"}).status_code
+            == 403
+        )
+
+    def test_service_refuses_to_disable_the_only_admin(self, test_db) -> None:
+        """服务层单独测一次「停用最后一个管理员」。
+
+        这条路径**通过接口走不到**：接口的操作者必然是在岗管理员（`AdminUser` 依赖
+        会拒绝停用中的账号），想停用最后一个管理员就得把自己也列进去，而那会先被
+        "不能停用自己的账号"挡下。
+
+        但服务层不该依赖调用方先做过检查 —— 换个入口（脚本、以后的新接口）就会
+        直接命中。所以这里绕过接口直接调用，把这条不变量钉住。
+        """
+        from app.core.config import settings
+        from app.core.exceptions import LastAdminProtected
+        from app.services.auth import AuthService
+
+        with test_db.session() as session:
+            sole_admin = User(
+                username="lonely",
+                display_name="lonely",
+                password_hash=hash_password("correct-horse"),
+                role=UserRole.ADMIN.value,
+            )
+            actor = User(
+                username="operator",
+                display_name="operator",
+                password_hash=hash_password("correct-horse"),
+                role=UserRole.ADMIN.value,
+            )
+            session.add_all([sole_admin, actor])
+            session.flush()
+
+            service = AuthService(settings)
+            # 只有 sole_admin 是可用管理员（actor 还没落库完成？不，它在库里但下面
+            # 先把它停用，好让 sole_admin 成为唯一一个）
+            service.set_active(session, actor=actor, target_id=actor.id, is_active=True)
+            session.flush()
+
+        with test_db.session() as session:
+            service = AuthService(settings)
+            admin_row = session.scalar(select(User).where(User.username == "lonely"))
+            actor_row = session.scalar(select(User).where(User.username == "operator"))
+            assert admin_row is not None and actor_row is not None
+
+            # 把操作者也降成普通用户，于是 lonely 是唯一的管理员
+            actor_row.role = UserRole.USER.value
+            session.flush()
+
+            with pytest.raises(LastAdminProtected):
+                service.bulk_update(
+                    session,
+                    actor=actor_row,
+                    target_ids=[admin_row.id],
+                    is_active=False,
+                )
+
+
 class TestUserManagement:
     """任务 10.4"""
 
@@ -787,7 +1045,6 @@ class TestUserManagement:
 
     def test_unknown_user_is_404(self, admin_client) -> None:
         assert admin_client.patch(f"{ADMIN}/users/9999", json={"role": "admin"}).status_code == 404
-
     def test_invalid_role_is_rejected(self, admin_client, test_db) -> None:
         user_id = self._seed_user(test_db, "alice")
         assert (

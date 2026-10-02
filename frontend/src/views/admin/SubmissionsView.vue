@@ -5,7 +5,7 @@
  * 分类标签是自由字段（不做语义校验），因此筛选项由**实际出现过的值**推导，
  * 而不是预设一份清单 —— 平台并不知道各活动会用什么标签。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import { ApiError } from '@/api/client'
@@ -22,6 +22,7 @@ import Modal from '@/components/ui/Modal.vue'
 import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import SplitPane from '@/components/ui/SplitPane.vue'
+import { useDragSelect } from '@/composables/useDragSelect'
 import {
   SUBMISSION_STATUS,
   SUBMISSION_STATUS_OPTIONS,
@@ -221,64 +222,17 @@ async function onQueueDelete(): Promise<void> {
 /** 侧栏宽度。也只在内存里 —— 它是这一屏的临时布局，不值得持久化 */
 const sideWidth = ref(300)
 
-/** 只在值真的变了才换新 Set，避免无谓的重渲染 */
-function setSelected(id: number, on: boolean): void {
-  if (selected.value.has(id) === on) return
-  const next = new Set(selected.value)
-  if (on) next.add(id)
-  else next.delete(id)
-  selected.value = next
-}
-
 /*
-  按住滑动多选。
-
-  拖动必须由列表统筹 —— 每个复选框并不知道自己的兄弟。状态机按使用者的直觉来定：
-
-    在某一行按下        → armed，记下这次要刷成什么值。**先不进入拖动**
-    按住并离开起点      → dragging。这时才算真的开始滑
-    滑过其它行          → 刷成起点的值
-    松开                → 全部复位
-
-  "按住但没离开起点"就是普通的选中／取消 —— 那一下在按下时已经翻转过了，这里不再
-  做任何事。这样区分的好处是：单击永远不会误触发拖动，拖动只在真的滑起来之后生效。
+  选中与按住滑动多选。
+  「按下」与「真的滑起来」是两回事，那段状态机在 `useDragSelect` 里，用户页共用
+  同一份 —— 抄一份迟早走样。
 */
-const armed = ref(false)
-const dragging = ref(false)
-const dragValue = ref(false)
-
-/** 按下：记下起点与目标状态，但先不进入拖动 */
-function onPress(value: boolean): void {
-  armed.value = true
-  dragging.value = false
-  dragValue.value = value
-}
-
-/**
- * 按住状态下离开了起点复选框 —— 这时才开始滑。
- *
- * 这个处理函数会挂在**每一个**复选框上（`pointerleave` 不冒泡，只能各自听）。
- * 无妨：`armed` 只在按下到松开之间为真，而那时第一次离开的必然是起点；之后的
- * 离开只是把已经是 true 的 `dragging` 再置一次。
- */
-function onLeave(): void {
-  if (armed.value) dragging.value = true
-}
-
-function onDragEnter(id: number): void {
-  // 只在真的滑起来之后才生效。否则鼠标扫过表格就会改动选择
-  if (!dragging.value) return
-  setSelected(id, dragValue.value)
-}
-
-function stopDrag(): void {
-  armed.value = false
-  dragging.value = false
-}
-
-// 指针可能在表格之外松开，所以听 window 而不是表格
-onMounted(() => window.addEventListener('pointerup', stopDrag))
-onBeforeUnmount(() => window.removeEventListener('pointerup', stopDrag))
+const {
+  set: setSelected,
+  onPress,
+  onLeave,
+  onEnter: onDragEnter,
+} = useDragSelect(selected)
 
 /**
  * 行内的复选框、按钮、链接有自己的行为 —— 把它们的点击也当成"选中整行"会让勾选

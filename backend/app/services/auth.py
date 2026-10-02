@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError
@@ -397,6 +398,80 @@ class AuthService:
         if target is None:
             raise NotFound("用户不存在")
         return target
+
+    def bulk_update(
+        self,
+        session: Session,
+        *,
+        actor: User,
+        target_ids: Sequence[int],
+        role: str | None = None,
+        is_active: bool | None = None,
+    ) -> int:
+        """批量改角色与／或启用状态，返回实际改动的条数。
+
+        **最后一个管理员的判定必须整批一起算。** 逐个调用 `set_role` / `set_active`
+        是错的：两个管理员一起降级时，第一次检查看到"还有另一个管理员在"（通过），
+        第二次检查时第一次的改动还没落库、同样通过 —— 于是**一个管理员都不剩**，
+        系统永久失去管理能力。这里改成先算出"改完之后还剩几个可用管理员"。
+
+        「可用管理员」= 角色为 admin **且** 已启用，与 `count_admins` 的口径一致：
+        停用一个管理员和把他降级一样，都会减少可用管理员的数量。
+        """
+        if not target_ids:
+            return 0
+
+        if role is not None and role not in {UserRole.USER.value, UserRole.ADMIN.value}:
+            raise BadRequest("角色取值不合法")
+
+        targets = self.users.list_by_ids(session, target_ids)
+        if not targets:
+            return 0
+
+        if is_active is False and any(target.id == actor.id for target in targets):
+            raise BadRequest("不能停用自己的账号")
+
+        if role is not None or is_active is not None:
+            self._assert_admins_remain(session, targets, role=role, is_active=is_active)
+
+        for target in targets:
+            if role is not None:
+                target.role = role
+            if is_active is not None:
+                target.is_active = is_active
+            # 权限或状态变了就吊销会话：不吊销的话，降级后的用户在旧会话里仍有管理
+            # 权限，而停用也只是"下次登录才生效"
+            if role is not None or is_active is False:
+                self.sessions.revoke_all_for_user(session, target.id)
+
+        session.flush()
+        return len(targets)
+
+    def _assert_admins_remain(
+        self,
+        session: Session,
+        targets: Sequence[User],
+        *,
+        role: str | None,
+        is_active: bool | None,
+    ) -> None:
+        """按这批改动算完之后，至少还要剩一个可用管理员。"""
+        from app.core.exceptions import LastAdminProtected
+
+        def still_admin(target: User) -> bool:
+            new_role = role if role is not None else target.role
+            new_active = is_active if is_active is not None else target.is_active
+            return new_role == UserRole.ADMIN.value and bool(new_active)
+
+        losing = sum(
+            1
+            for target in targets
+            if target.role == UserRole.ADMIN.value
+            and target.is_active
+            and not still_admin(target)
+        )
+        if self.users.count_admins(session) - losing <= 0:
+            raise LastAdminProtected()
 
     def _assert_not_last_admin(self, session: Session, target: User) -> None:
         """不能移除最后一个管理员，否则系统会失去管理能力。"""

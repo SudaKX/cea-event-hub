@@ -35,6 +35,7 @@ from app.schemas.auth import (
     ResetTokenResponse,
     UserAdminEnvelope,
     UserAdminPublic,
+    UserBulkRequest,
     UserListResponse,
     UserUpdateRequest,
 )
@@ -425,6 +426,34 @@ def list_users(
     return UserListResponse(
         users=[UserAdminPublic.from_model(row) for row in rows], total=total
     )
+
+
+@router.post(
+    "/users:bulk",
+    status_code=status.HTTP_200_OK,
+    summary="批量改用户角色或启用状态",
+)
+def bulk_update_users(
+    payload: UserBulkRequest,
+    session: DbSession,
+    admin: AdminUser,
+    settings: RuntimeSettings,
+) -> dict[str, int]:
+    """一次请求改一批用户的角色与／或启用状态。
+
+    与提交那边的 `:review` 对称，理由相同：管理端会把名单攒起来统一处理，逐条
+    `PATCH` 就是几十个请求，而它们本该是一次事务。
+
+    返回**实际改动的条数**：期间被删掉的账号会被跳过。
+    """
+    updated = AuthService(settings).bulk_update(
+        session,
+        actor=admin,
+        target_ids=payload.ids,
+        role=payload.role,
+        is_active=payload.is_active,
+    )
+    return {"updated": updated}
 
 
 @router.patch(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas import UserPublic
 
@@ -88,6 +88,26 @@ class UserUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class UserBulkRequest(BaseModel):
+    """批量改角色与／或启用状态。
+
+    `role` 与 `is_active` 至少要给一个；两个都给就一起改。**不给 display_name**：
+    给一批人设同一个显示名没有意义，逐条改才是对的。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[int] = Field(min_length=1, max_length=200)
+    role: str | None = None
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def _require_something_to_change(self) -> UserBulkRequest:
+        if self.role is None and self.is_active is None:
+            raise ValueError("至少要给出 role 或 is_active")
+        return self
+
+
 class UserListResponse(BaseModel):
     users: list[UserAdminPublic]
     total: int
@@ -103,6 +123,7 @@ __all__ = [
     "LoginRequest",
     "RegisterRequest",
     "ResetPasswordRequest",
+    "UserBulkRequest",
     "ResetTokenResponse",
     "TokenRequest",
     "UserAdminEnvelope",

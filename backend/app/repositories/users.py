@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import Select, delete, func, select
@@ -15,6 +16,18 @@ class UserRepository:
 
     def get(self, session: Session, user_id: int) -> User | None:
         return session.get(User, user_id)
+
+    def list_by_ids(self, session: Session, user_ids: Sequence[int]) -> list[User]:
+        """一次取回多个用户。
+
+        批量端点存在的意义就是省掉逐条往返；循环 `get` 的话，"批量"只是把 N 次
+        请求换成了 N 次查询。
+        """
+        if not user_ids:
+            return []
+        return list(
+            session.scalars(select(User).where(User.id.in_(list(user_ids)))).all()
+        )
 
     def get_by_username(self, session: Session, username: str) -> User | None:
         """按**归一化后**的用户名查找；调用方负责先归一化。"""

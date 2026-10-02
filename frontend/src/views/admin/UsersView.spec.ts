@@ -1,9 +1,9 @@
 /**
- * 用户管理：分页、筛选与账号状态。
+ * 用户管理：分页、筛选、名单与批量操作。
  *
- * 分页是这里新加的，而且加之前是**真的坏了**：后端 `/admin/users` 默认每页 50 条，
- * 而前端不传分页参数却在页脚显示真实总数 —— 用户超过 50 时列表静默截断，数字和
- * 内容对不上。所以这一组主要盯着"页码真的发出去了"和"数字只有一处显示"。
+ * 分页是之前补的，补之前**真的坏了**：后端 `/admin/users` 默认每页 50 条，而前端
+ * 不传分页参数却在页脚显示真实总数 —— 用户超过 50 时列表静默截断，数字和内容对
+ * 不上。所以这一组既盯着分页，也盯着"名单跨页累积"这类容易做错的联动。
  */
 import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -78,6 +78,13 @@ function pagerButton(wrapper: ReturnType<typeof mount>, label: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // 默认"全都改成功"
+  post.mockImplementation((url: string, body?: { ids?: number[] }) => {
+    if (url === '/admin/users:bulk') {
+      return Promise.resolve({ data: { updated: body?.ids?.length ?? 0 } })
+    }
+    return Promise.resolve({ data: {} })
+  })
 })
 afterEach(() => {
   vi.restoreAllMocks()
@@ -115,8 +122,8 @@ describe('分页', () => {
     await vi.waitFor(() => expect(lastParams().page).toBe(2))
     await wrapper.vm.$nextTick()
 
-    // 表里确实是第 21 个人起
-    expect(wrapper.find('tbody tr td').text()).toBe('21')
+    // 表里确实是第 21 个人起。第一格现在是复选框，所以按编号按钮取
+    expect(wrapper.find('.row-link').text()).toBe('21')
     wrapper.unmount()
   })
 
@@ -152,13 +159,14 @@ describe('分页', () => {
     wrapper.unmount()
   })
 
-  it('点刷新也回到第 1 页', async () => {
+  it('点查询也回到第 1 页', async () => {
+    // 原来的「刷新」与「查询」是同一件事（都按当前条件重新拉第一页），合并成一个
     const wrapper = await mountView()
 
     await pagerButton(wrapper, '下一页').trigger('click')
     await vi.waitFor(() => expect(lastParams().page).toBe(2))
 
-    await wrapper.findAll('button').find((b) => b.text() === '刷新')!.trigger('click')
+    await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
 
     await vi.waitFor(() => expect(lastParams().page).toBe(1))
     wrapper.unmount()
@@ -222,9 +230,145 @@ describe('账号状态标签', () => {
     await vi.waitFor(() => expect(get).toHaveBeenCalled())
     await wrapper.vm.$nextTick()
 
+    // 列序：勾选 / 编号 / 用户名 / 显示名 / 角色 / 状态 / 邮箱
     const cells = wrapper.findAll('tbody tr')[1]!.findAll('td')
-    expect(cells[4]!.find('.tag').classes()).toContain('tag--off')
-    expect(cells[4]!.text()).toBe('停用')
+    expect(cells[5]!.find('.tag').classes()).toContain('tag--off')
+    expect(cells[5]!.text()).toBe('停用')
+    wrapper.unmount()
+  })
+})
+
+describe('名单与行交互', () => {
+  const button = (wrapper: ReturnType<typeof mount>, label: string) =>
+    wrapper.findAll('button').find((b) => b.text() === label)!
+
+  const rosterNames = (wrapper: ReturnType<typeof mount>) =>
+    wrapper.findAll('.side__who').map((node) => node.text())
+
+  async function selectRow(wrapper: ReturnType<typeof mount>, index: number) {
+    await wrapper.findAll('tbody tr')[index]!.trigger('click')
+    await wrapper.vm.$nextTick()
+  }
+
+  it('页面结构与提交页一致：筛选在左栏、名单在右栏', async () => {
+    const wrapper = await mountView()
+
+    const main = wrapper.find('.split__main')
+    expect(main.find('.filters').exists()).toBe(true)
+    expect(main.find('table').exists()).toBe(true)
+    expect(wrapper.find('.split__side .side').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('单击整行只选中，双击才打开详情', async () => {
+    const wrapper = await mountView()
+    const dialogEl = () => wrapper.find('.user-modal').element as HTMLDialogElement
+
+    await selectRow(wrapper, 0)
+    expect(dialogEl().open).toBe(false)
+    expect(wrapper.findAll('tbody tr')[0]!.classes()).toContain('row--selected')
+
+    await wrapper.findAll('tbody tr')[0]!.trigger('dblclick')
+    await wrapper.vm.$nextTick()
+    expect(dialogEl().open).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('加入名单后跨页保留', async () => {
+    const wrapper = await mountView()
+
+    await selectRow(wrapper, 0)
+    await button(wrapper, '加入名单').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(rosterNames(wrapper)).toEqual(['u1'])
+    // 入单后清掉勾选，避免误以为还在"待入单"
+    expect(wrapper.find('.pick__count').text()).toBe('已选 0 位')
+
+    // 翻页之后再入一个，名单应当累积
+    await pagerButton(wrapper, '下一页').trigger('click')
+    await vi.waitFor(() => expect(lastParams().page).toBe(2))
+    await wrapper.vm.$nextTick()
+    await selectRow(wrapper, 0)
+    await button(wrapper, '加入名单').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(rosterNames(wrapper)).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('已在名单里的不重复添加', async () => {
+    const wrapper = await mountView()
+
+    for (let i = 0; i < 2; i++) {
+      await selectRow(wrapper, 0)
+      await button(wrapper, '加入名单').trigger('click')
+      await wrapper.vm.$nextTick()
+    }
+
+    expect(rosterNames(wrapper)).toEqual(['u1'])
+    wrapper.unmount()
+  })
+
+  it('移出名单与逐条 × 都能用', async () => {
+    const wrapper = await mountView()
+
+    await selectRow(wrapper, 0)
+    await button(wrapper, '加入名单').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(rosterNames(wrapper)).toEqual(['u1'])
+
+    await wrapper.find('.side__drop').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(rosterNames(wrapper)).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('数量对不上时给出提示', async () => {
+    // 期间有人被删掉：批量端点返回的是实际改动数
+    const wrapper = await mountView()
+    post.mockResolvedValue({ data: { updated: 1 } })
+
+    await selectRow(wrapper, 0)
+    await button(wrapper, '加入名单').trigger('click')
+    await wrapper.vm.$nextTick()
+    await selectRow(wrapper, 1)
+    await button(wrapper, '加入名单').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    await button(wrapper, '提权').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('.ok').exists()).toBe(true))
+
+    expect(wrapper.find('.ok').text()).toContain('已处理 1 位')
+    wrapper.unmount()
+  })
+
+  it('名单为空时批量按钮都不可点', async () => {
+    const wrapper = await mountView()
+
+    for (const label of ['提权', '降权', '停用', '启用']) {
+      expect(button(wrapper, label).attributes('disabled')).toBeDefined()
+    }
+    wrapper.unmount()
+  })
+
+  it('批量操作一次请求带上整份名单', async () => {
+    const wrapper = await mountView()
+    post.mockResolvedValue({ data: { updated: 2 } })
+
+    await selectRow(wrapper, 0)
+    await button(wrapper, '加入名单').trigger('click')
+    await wrapper.vm.$nextTick()
+    await selectRow(wrapper, 1)
+    await button(wrapper, '加入名单').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    await button(wrapper, '停用').trigger('click')
+    await vi.waitFor(() => expect(post).toHaveBeenCalled())
+
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(post.mock.calls[0]![0]).toBe('/admin/users:bulk')
+    expect(post.mock.calls[0]![1]).toEqual({ ids: [1, 2], is_active: false })
     wrapper.unmount()
   })
 })
