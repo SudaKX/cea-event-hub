@@ -269,11 +269,16 @@
 }
 
 /*
-  标签配色。后缀来自两处：
+  标签配色。后缀来自三处：
   - 活动状态：draft / live / archived
   - 提交状态码：ignored(0) / received(1) / accepted(2)，见 domain/submission.ts
+  - 账号启用状态：off（停用）
 
   数字不能直接进 class 名，所以状态码先经 statusTone() 映射成词。
+
+  **新增后缀必须在这里定义。** 用了不存在的类名不会报错，只是默默地没有样式 ——
+  「停用」标签就这样失效过一次（曾经用的 tag--rejected 在状态改造时被改名了）。
+  `styles/tokens.spec.ts` 里有一条测试专门看着这件事。
 */
 .tag--live,
 .tag--accepted {
@@ -281,8 +286,9 @@
   color: var(--red-hi);
 }
 
-/* 不采用：比"待处理"更弱，用最暗的一档，避免和已采用抢注意力 */
-.tag--ignored {
+/* 不采用 / 停用：比中性更弱，用最暗的一档，避免和正面状态抢注意力 */
+.tag--ignored,
+.tag--off {
   border-color: var(--line-strong);
   color: var(--dim);
 }

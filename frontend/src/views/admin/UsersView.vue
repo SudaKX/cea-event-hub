@@ -5,9 +5,10 @@
  * 提权与降级都会**吊销该用户的全部会话** —— 否则降级后的用户在旧会话里仍然
  * 持有管理权限，而"停用"会退化成"下次登录才生效"。
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { ApiError, http } from '@/api/client'
+import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import type { ResetToken, UserAdmin } from '@/types/api'
 
@@ -26,6 +27,8 @@ const ACTIVE_OPTIONS: SelectOption[] = [
 
 const users = ref<UserAdmin[]>([])
 const total = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
 const role = ref('')
 const isActive = ref('')
 const username = ref('')
@@ -33,6 +36,10 @@ const error = ref('')
 const notice = ref('')
 const loading = ref(false)
 const issued = ref<ResetToken | null>(null)
+
+const pageCount = computed(() =>
+  Math.max(1, Math.ceil(total.value / Math.max(1, pageSize.value))),
+)
 
 async function load(): Promise<void> {
   loading.value = true
@@ -42,16 +49,48 @@ async function load(): Promise<void> {
         role: role.value || undefined,
         is_active: isActive.value === '' ? undefined : isActive.value === 'true',
         username: username.value || undefined,
+        page: page.value,
+        page_size: pageSize.value,
       },
     })
     users.value = data.users
     total.value = data.total
     error.value = ''
+
+    // 过滤后结果变少、或停用了某个人之后，当前页可能已经不存在了。
+    // 不退页的话会停在一片空白上，而分页器还说这一页存在。
+    if (page.value > pageCount.value) {
+      page.value = pageCount.value
+      await load()
+    }
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '加载失败'
   } finally {
     loading.value = false
   }
+}
+
+/** 换筛选条件要回到第一页，否则会停在一个新结果集里不存在的页码上 */
+function reload(): void {
+  page.value = 1
+  void load()
+}
+
+/**
+ * 翻页与改每页条数走**显式处理函数**而不是 watch。
+ *
+ * `load` 里有个"当前页越界就退一页"的自我修正，用 watch 的话那次修正会再触发一次
+ * watch，同一个动作发两次请求。
+ */
+function onPageChange(next: number): void {
+  page.value = next
+  void load()
+}
+
+function onPageSizeChange(next: number): void {
+  pageSize.value = next
+  page.value = 1
+  void load()
 }
 
 async function patch(user: UserAdmin, changes: Record<string, unknown>): Promise<void> {
@@ -98,7 +137,6 @@ onMounted(load)
           提权与停用会立即吊销该用户的全部会话。系统不允许移除最后一个管理员。
         </p>
       </div>
-      <span class="num dim">共 {{ total }} 人</span>
     </header>
 
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
@@ -120,25 +158,21 @@ onMounted(load)
     <div class="panel filters">
       <label class="field">
         <span class="field__label">用户名</span>
-        <input v-model="username" @keyup.enter="load" />
+        <input v-model="username" @keyup.enter="reload" />
       </label>
-      <Select
-        v-model="role"
-        label="角色"
-        :options="ROLE_OPTIONS"
-        @update:model-value="load"
-      />
+      <Select v-model="role" label="角色" :options="ROLE_OPTIONS" @update:model-value="reload" />
       <Select
         v-model="isActive"
         label="状态"
         :options="ACTIVE_OPTIONS"
-        @update:model-value="load"
+        @update:model-value="reload"
       />
-      <button class="btn btn--ghost btn--small" @click="load">刷新</button>
+      <button class="btn btn--ghost btn--small" @click="reload">刷新</button>
     </div>
 
     <div class="panel">
       <p v-if="loading" class="empty">加载中…</p>
+      <p v-else-if="users.length === 0" class="empty">没有符合条件的用户。</p>
       <table v-else class="table">
         <thead>
           <tr>
@@ -158,7 +192,7 @@ onMounted(load)
             <td>{{ user.display_name }}</td>
             <td><span class="tag" :class="user.role === 'admin' ? 'tag--live' : ''">{{ user.role }}</span></td>
             <td>
-              <span class="tag" :class="user.is_active ? '' : 'tag--rejected'">
+              <span class="tag" :class="user.is_active ? '' : 'tag--off'">
                 {{ user.is_active ? '启用' : '停用' }}
               </span>
             </td>
@@ -206,6 +240,15 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
+
+      <Pager
+        :page="page"
+        :page-size="pageSize"
+        :total="total"
+        unit="人"
+        @update:page="onPageChange"
+        @update:page-size="onPageSizeChange"
+      />
     </div>
   </section>
 </template>

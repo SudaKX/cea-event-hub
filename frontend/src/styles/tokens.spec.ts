@@ -4,7 +4,7 @@
  * 直接读 CSS 源文件而不是 getComputedStyle：变量可能被别处覆盖，
  * 而这里要断言的是"定义本身与规格一致"。
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -87,5 +87,56 @@ describe('样式约束', () => {
 
   it('标题使用等宽字体', () => {
     expect(baseCss).toMatch(/h1,\s*h2,\s*h3\s*\{[^}]*var\(--mono\)/)
+  })
+})
+
+describe('标签配色不留空档', () => {
+  /*
+    用了未定义的类名不会报错，只是**默默地没有样式** —— 页面上看不出异常，
+    只有仔细比对才会发现某个标签"好像变淡了"。
+
+    「停用」标签就这样失效过：提交状态改造时把 tag--rejected 改名为 tag--ignored，
+    而 UsersView 还在用旧名字。所以这里逐个核对源码里出现的后缀。
+  */
+  const viewDir = resolve(process.cwd(), 'src')
+
+  /** 递归收集所有 .vue / .ts 源码（排除测试与样式文件本身） */
+  function collectSources(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = resolve(dir, entry.name)
+      if (entry.isDirectory()) return collectSources(full)
+      if (!/\.(vue|ts)$/.test(entry.name)) return []
+      if (/\.spec\.ts$/.test(entry.name)) return []
+      return [readFileSync(full, 'utf-8')]
+    })
+  }
+
+  it('源码里静态用到的 tag--* 都在 components.css 里有定义', () => {
+    const defined = new Set(
+      [...componentsCss.matchAll(/\.(tag--[a-z][a-z0-9-]*)/g)].map((m) => m[1]),
+    )
+    expect(defined.size).toBeGreaterThan(0)
+
+    const used = new Set<string>()
+    for (const source of collectSources(viewDir)) {
+      for (const match of source.matchAll(/'tag--([a-z][a-z0-9-]*)'|"tag--([a-z][a-z0-9-]*)"|`tag--([a-z][a-z0-9-]*)`/g)) {
+        used.add(`tag--${match[1] ?? match[2] ?? match[3]}`)
+      }
+    }
+
+    const missing = [...used].filter((name) => !defined.has(name)).sort()
+    expect(missing).toEqual([])
+  })
+
+  it('动态拼出来的状态后缀也都有定义', () => {
+    // statusTone() 返回的词会拼进 `tag--${tone}`，静态扫描抓不到，所以单独核对
+    const defined = new Set(
+      [...componentsCss.matchAll(/\.(tag--[a-z][a-z0-9-]*)/g)].map((m) => m[1]),
+    )
+    const statusSource = readFileSync(resolve(viewDir, 'domain/submission.ts'), 'utf-8')
+    const tones = [...statusSource.matchAll(/:\s*'([a-z]+)',?\s*$/gm)].map((m) => `tag--${m[1]}`)
+
+    expect(tones.length).toBeGreaterThan(0)
+    for (const tone of tones) expect(defined).toContain(tone)
   })
 })
