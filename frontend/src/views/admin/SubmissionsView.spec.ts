@@ -66,11 +66,18 @@ function submission(id: number) {
   }
 }
 
-async function mountView() {
+/**
+ * 挂载视图。
+ *
+ * `total` 可以调大，用来造出多页 —— 像"翻到第 2 页再搜索，应当回到第 1 页"这类
+ * 断言，只有一页时根本无从验证（下一页按钮是禁用的）。
+ */
+async function mountView(options: { total?: number } = {}) {
+  const total = options.total ?? 2
   listAdminEvents.mockResolvedValue([EVENT])
   listEventSubmissions.mockResolvedValue({
     submissions: [submission(1), submission(2)],
-    total: 2,
+    total,
   })
 
   const router = createRouter({
@@ -377,6 +384,140 @@ describe('队列', () => {
 
     expect(wrapper.find('tbody .actions').exists()).toBe(false)
     expect(wrapper.find('th.col-actions').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+describe('内容搜索', () => {
+  /*
+    输入与"已生效的搜索词"是**两个变量**：查询只在回车或点搜索时才发出去。
+
+    绑成同一个的话，中文输入法还没上屏就会触发查询 —— 拼音字母会当成搜索词发到
+    后端；即便用英文，每敲一个字也查一次，"张三"会先按"张"白查一遍。
+  */
+  /** 搜索框本身带 `.filters__search`（它不再是某个容器的子元素） */
+  const searchBox = (wrapper: ReturnType<typeof mount>) => wrapper.find('.filters__search')
+
+  /** mock 打的是包装函数 `listEventSubmissions(eventId, filters)`，所以 filters 是第二个参数 */
+  const getCalls = () =>
+    listEventSubmissions.mock.calls as [string, Record<string, unknown>][]
+  const lastFilters = () => getCalls()[getCalls().length - 1]?.[1] ?? {}
+  const lastQuery = () => lastFilters().q
+
+  it('默认不带搜索词', async () => {
+    const wrapper = await mountView()
+
+    expect(lastQuery()).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('打字时不发查询', async () => {
+    const wrapper = await mountView()
+    const before = listEventSubmissions.mock.calls.length
+
+    await searchBox(wrapper).setValue('张三')
+    await wrapper.vm.$nextTick()
+
+    expect(listEventSubmissions.mock.calls.length).toBe(before)
+    wrapper.unmount()
+  })
+
+  it('按回车才查', async () => {
+    const wrapper = await mountView()
+
+    await searchBox(wrapper).setValue('张三')
+    await searchBox(wrapper).trigger('keyup.enter')
+
+    await vi.waitFor(() => expect(lastQuery()).toBe('张三'))
+    wrapper.unmount()
+  })
+
+  it('点搜索按钮也查', async () => {
+    const wrapper = await mountView()
+
+    await searchBox(wrapper).setValue('嵌入式')
+    await wrapper.findAll('button').find((b) => b.text() === '搜索')!.trigger('click')
+
+    await vi.waitFor(() => expect(lastQuery()).toBe('嵌入式'))
+    wrapper.unmount()
+  })
+
+  it('搜索回到第一页', async () => {
+    // 否则会停在一个新结果集里不存在的页码上
+    const wrapper = await mountView({ total: 40 })
+
+    await wrapper.findAll('button').find((b) => b.text() === '下一页')!.trigger('click')
+    await vi.waitFor(() => expect(lastFilters().page).toBe(2))
+
+    await searchBox(wrapper).setValue('张三')
+    await searchBox(wrapper).trigger('keyup.enter')
+
+    await vi.waitFor(() => expect(lastQuery()).toBe('张三'))
+    expect(lastFilters().page).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('首尾空白会被去掉', async () => {
+    const wrapper = await mountView()
+
+    await searchBox(wrapper).setValue('  张三  ')
+    await searchBox(wrapper).trigger('keyup.enter')
+
+    await vi.waitFor(() => expect(lastQuery()).toBe('张三'))
+    wrapper.unmount()
+  })
+
+  it('清除按钮只在搜索生效后出现，点了就恢复全部', async () => {
+    const wrapper = await mountView()
+    expect(wrapper.findAll('button').some((b) => b.text() === '清除')).toBe(false)
+
+    await searchBox(wrapper).setValue('张三')
+    await searchBox(wrapper).trigger('keyup.enter')
+    await vi.waitFor(() => expect(lastQuery()).toBe('张三'))
+
+    await wrapper.findAll('button').find((b) => b.text() === '清除')!.trigger('click')
+    await vi.waitFor(() => expect(lastQuery()).toBeUndefined())
+
+    // 输入框也一并清空，否则框里还留着词而结果已经是全部
+    expect((searchBox(wrapper).element as HTMLInputElement).value).toBe('')
+    wrapper.unmount()
+  })
+
+  it('搜索单独占一整行', async () => {
+    // 它搜的是整份内容，与上面三个"按属性筛选"不是一回事
+    const wrapper = await mountView()
+
+    const rows = wrapper.findAll('.filters__row')
+    expect(rows).toHaveLength(2)
+
+    // 三个筛选在第一行，搜索在第二行
+    expect(rows[0]!.findAll('.select')).toHaveLength(3)
+    expect(rows[1]!.find('.filters__search').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('搜索框带 input 类，否则会回落到浏览器默认外观', async () => {
+    /*
+      输入框的外观规则是 `.field input, …, .input`。这一行的搜索框刻意不在 `.field`
+      里（它是横向 flex 的一格），所以必须自己带上 `.input` —— 漏了的话控件会变成
+      系统默认的白底，在暗色界面上格外刺眼。
+    */
+    const wrapper = await mountView()
+
+    expect(searchBox(wrapper).classes()).toContain('input')
+    wrapper.unmount()
+  })
+
+  it('搜索与其它筛选条件并存', async () => {
+    const wrapper = await mountView()
+
+    await searchBox(wrapper).setValue('张三')
+    await searchBox(wrapper).trigger('keyup.enter')
+    await vi.waitFor(() => expect(lastQuery()).toBe('张三'))
+
+    // 搜索生效之后，后续的加载仍然带着它
+    expect(lastFilters().q).toBe('张三')
+    expect(lastFilters().event_id ?? getCalls()[0]![0]).toBe('spring-2026')
     wrapper.unmount()
   })
 })

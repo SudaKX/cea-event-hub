@@ -5,10 +5,26 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import Select, delete, func, select
+from sqlalchemy import Select, String, cast, delete, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Submission, SubmissionFile
+
+#: LIKE 的转义符。反斜杠是 SQL 的惯例，SQLite 与 MySQL 都认。
+_LIKE_ESCAPE = "\\"
+
+
+def escape_like(term: str) -> str:
+    """把用户输入里的 LIKE 元字符转义掉。
+
+    不转义的话搜 `%` 会匹配全部、搜 `_` 会匹配任意单字符 —— 用户以为自己搜了一个
+    具体符号，实际得到的是通配。反斜杠要先转，否则会把后面补的转义符再转一次。
+    """
+    return (
+        term.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", f"{_LIKE_ESCAPE}%")
+        .replace("_", f"{_LIKE_ESCAPE}_")
+    )
 
 
 class SubmissionRepository:
@@ -70,6 +86,7 @@ class SubmissionRepository:
         submitter: str | None = None,
         created_from: datetime | None = None,
         created_to: datetime | None = None,
+        payload_contains: str | None = None,
     ) -> Select:
         statement = (
             select(Submission)
@@ -86,6 +103,18 @@ class SubmissionRepository:
             statement = statement.where(Submission.created_at >= created_from)
         if created_to is not None:
             statement = statement.where(Submission.created_at <= created_to)
+        if payload_contains:
+            # 对内容做子串匹配，而不是解析 JSON 里的某个键 —— payload 没有字段级
+            # 契约，活动自己决定放什么，平台无从知道该搜哪个键。
+            #
+            # `cast(..., String)` 是为了跨库：SQLite 与 MySQL 的 JSON 列都不是可直接
+            # LIKE 的文本类型，转成字符串后两边行为一致（方言差异由 SQLAlchemy 吸收，
+            # 这里不必写方言 SQL）。
+            statement = statement.where(
+                cast(Submission.payload, String).like(
+                    f"%{escape_like(payload_contains)}%", escape=_LIKE_ESCAPE
+                )
+            )
         return statement
 
     def list_for_submitter(

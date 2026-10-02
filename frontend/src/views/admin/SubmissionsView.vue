@@ -49,6 +49,16 @@ const helpOpen = ref(false)
 const submissions = ref<Submission[]>([])
 const total = ref(0)
 const selected = ref<Set<number>>(new Set())
+/**
+ * 内容搜索。
+ *
+ * 输入与"已生效的搜索词"**分开两个变量**：输入框每敲一个字都变，而查询只在按下
+ * 回车或点搜索时才发出去。绑成同一个的话，中文输入法还没上屏就会触发查询 ——
+ * 拼音字母会当成搜索词发到后端。
+ */
+const searchInput = ref('')
+const appliedSearch = ref('')
+
 const error = ref('')
 /**
  * 非错误的提示。现在只有一个来源：批量操作**部分成功** —— 勾选期间有人删掉了
@@ -103,6 +113,7 @@ async function loadSubmissions(): Promise<void> {
     const result = await listEventSubmissions(eventId.value, {
       kind: kind.value || undefined,
       status: parseStatusFilter(status.value),
+      q: appliedSearch.value || undefined,
       page: page.value,
       page_size: pageSize.value,
     })
@@ -318,11 +329,32 @@ function onPageSizeChange(next: number): void {
   void loadSubmissions()
 }
 
-// 换活动或换筛选条件都要回到第一页，否则会停在一个新结果集里不存在的页码上
+// 换活动或换筛选条件都要回到第一页，否则会停在一个新结果集里不存在的页码上。
+// 搜索词不在这个列表里 —— 它由 applySearch 显式触发，见那里的说明。
 watch([eventId, kind, status], () => {
   page.value = 1
   void loadSubmissions()
 })
+
+/**
+ * 让搜索词生效。
+ *
+ * 手动触发而不是 watch 输入框：一是中文输入法未上屏时不该发查询，二是每敲一个字
+ * 就查一次的话，"张三"会先按"张"查一遍 —— 那次查询的结果没人要，还占着后端的
+ * 一次 LIKE 全表扫描。
+ */
+function applySearch(): void {
+  appliedSearch.value = searchInput.value.trim()
+  page.value = 1
+  void loadSubmissions()
+}
+
+function clearSearch(): void {
+  searchInput.value = ''
+  appliedSearch.value = ''
+  page.value = 1
+  void loadSubmissions()
+}
 
 onMounted(async () => {
   await loadEvents()
@@ -384,151 +416,187 @@ onMounted(async () => {
     <!-- 不是错误，但也得说：否则"改了几条"和"点了几条"对不上时没人知道 -->
     <p v-if="notice" class="ok">{{ notice }}</p>
 
-    <!--
-      选择规则：候选项来自数据、数量不可预期时开搜索（活动、分类都是），
-      固定枚举（状态三档）看得完，不必搜。
-    -->
-    <div class="panel filters">
-      <Select v-model="eventId" label="活动" :options="eventOptions" searchable />
-
-      <Select
-        v-model="kind"
-        label="分类"
-        :options="[{ value: '', label: '全部' }, ...kindOptions]"
-        searchable
-      />
-
-      <Select v-model="status" label="状态" :options="SUBMISSION_STATUS_OPTIONS" />
-    </div>
-
     <SplitPane v-model="sideWidth" :min="260" :max="560">
-      <div class="panel">
-        <p v-if="loading" class="empty">加载中…</p>
-        <p v-else-if="events.length === 0" class="empty">还没有活动。</p>
-        <p v-else-if="submissions.length === 0" class="empty">没有符合条件的提交。</p>
       <!--
-        列宽固定：内容是一段长度不受控的 JSON，不钉死列宽的话某一格会撑开整列，
-        扫读时眼睛找不到列。看不全的内容由点击整行弹出的详情对话框兜住。
-        滚动容器见 .table-scroll —— 它才是"定宽"能成立的前提。
+        筛选在**左栏**、列表上方：它筛的是这一栏里的列表，摆在同一栏里才看得出
+        归属；放在分栏之外会显得它同时管着右侧那条跨页累积的队列（它并不管）。
       -->
-        <div v-else class="table-scroll">
-          <table class="table table--fixed">
-            <thead>
-              <tr>
-                <th class="col-check" />
-                <th class="col-id">#</th>
-                <th class="col-submitter">提交者</th>
-                <th class="col-kind">分类</th>
-                <th class="col-payload">内容</th>
-                <th class="col-files">附件</th>
-                <th class="col-status">状态</th>
-                <th class="col-time">时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="item in submissions"
-                :key="item.id"
-                :class="['row--clickable', { 'row--selected': selected.has(item.id) }]"
-                @click="onRowClick($event, item)"
-                @dblclick="onRowDoubleClick($event, item)"
-              >
-                <td>
-                  <Checkbox
-                    :model-value="selected.has(item.id)"
-                    :label="`选择提交 ${item.id}`"
-                    @update:model-value="(on) => setSelected(item.id, on)"
-                    @press="onPress"
-                    @pointerenter="onDragEnter(item.id)"
-                    @pointerleave="onLeave"
-                  />
-                </td>
-                <td class="num">
-                  <!--
-                    编号做成按钮，作为**键盘可达**的详情入口：整行单击只对鼠标友好，
-                    键盘用户需要一个真正的控件。单击整行则是选中，见 onRowClick。
-                  -->
-                  <button class="row-link" type="button" @click="detail = item">
-                    {{ item.id }}
-                  </button>
-                </td>
-                <!--
-                  外面必须是 <td>，里面再套一层 flex。
-                  直接把 <td> 设成 display:flex 会让它不再是 table-cell，
-                  行分隔线与列对齐会跟着断掉。
-                -->
-                <td class="num">
-                  <div class="submitter">
+      <div class="stack">
+        <div class="panel filters">
+          <div class="filters__row">
+            <Select v-model="eventId" label="活动" :options="eventOptions" searchable />
+
+            <Select
+              v-model="kind"
+              label="分类"
+              :options="[{ value: '', label: '全部' }, ...kindOptions]"
+              searchable
+            />
+
+            <Select v-model="status" label="状态" :options="SUBMISSION_STATUS_OPTIONS" />
+          </div>
+
+          <!--
+            内容搜索**单独占一行**：它搜的是提交内容那一整段文本，与上面三个"按属性
+            筛选"不是一回事，挤在同一行里会让人以为它也只搜某一列。
+
+            这一行不再套"标签在上"的字段结构，与上一行同为横向 flex；搜索框的用途靠
+            placeholder 表达，另给 aria-label 保无障碍。
+
+            **必须显式带 `input` 类。** 输入框的外观规则是 `.field input, …, .input`
+            —— 出了 `.field` 又没有这个类，它就会回落到浏览器默认外观（白底）。
+          -->
+          <div class="filters__row">
+            <input
+              v-model="searchInput"
+              class="input filters__search"
+              type="search"
+              aria-label="在提交内容里搜索"
+              placeholder="搜索内容：姓名、备注、任意字段的值……"
+              @keyup.enter="applySearch"
+            />
+            <button class="btn btn--ghost btn--control" type="button" @click="applySearch">
+              搜索
+            </button>
+            <button
+              v-if="appliedSearch"
+              class="btn btn--ghost btn--control"
+              type="button"
+              @click="clearSearch"
+            >
+              清除
+            </button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <p v-if="loading" class="empty">加载中…</p>
+          <p v-else-if="events.length === 0" class="empty">还没有活动。</p>
+          <p v-else-if="submissions.length === 0" class="empty">没有符合条件的提交。</p>
+          <!--
+          列宽固定：内容是一段长度不受控的 JSON，不钉死列宽的话某一格会撑开整列，
+          扫读时眼睛找不到列。看不全的内容由点击整行弹出的详情对话框兜住。
+          滚动容器见 .table-scroll —— 它才是"定宽"能成立的前提。
+          -->
+          <div v-else class="table-scroll">
+            <table class="table table--fixed">
+              <thead>
+                <tr>
+                  <th class="col-check" />
+                  <th class="col-id">#</th>
+                  <th class="col-submitter">提交者</th>
+                  <th class="col-kind">分类</th>
+                  <th class="col-payload">内容</th>
+                  <th class="col-files">附件</th>
+                  <th class="col-status">状态</th>
+                  <th class="col-time">时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="item in submissions"
+                  :key="item.id"
+                  :class="['row--clickable', { 'row--selected': selected.has(item.id) }]"
+                  @click="onRowClick($event, item)"
+                  @dblclick="onRowDoubleClick($event, item)"
+                >
+                  <td>
+                    <Checkbox
+                      :model-value="selected.has(item.id)"
+                      :label="`选择提交 ${item.id}`"
+                      @update:model-value="(on) => setSelected(item.id, on)"
+                      @press="onPress"
+                      @pointerenter="onDragEnter(item.id)"
+                      @pointerleave="onLeave"
+                    />
+                  </td>
+                  <td class="num">
                     <!--
-                      匿名标识是 `a:<uuid>`，38 个字符，远超这一列宽度，必须截断。
-                      标签不能跟着被截 —— 它才是这一列真正要看的信息。
+                      编号做成按钮，作为**键盘可达**的详情入口：整行单击只对鼠标友好，
+                      键盘用户需要一个真正的控件。单击整行则是选中，见 onRowClick。
                     -->
-                    <CellText class="submitter__id" :text="item.submitter" />
-                    <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
-                  </div>
-                </td>
-                <td class="num kind-cell">
-                  <CellText :text="item.kind" />
-                </td>
-                <td class="payload-cell">
-                  <CellText :text="payloadSummary(item.payload)" />
-                </td>
-                <td>
-                  <a
-                    v-for="file in item.files"
-                    :key="file.id"
-                    class="mono file-link"
-                    :href="attachmentUrl(item.id, file.id)"
-                  >
-                    {{ file.original_name }}
-                  </a>
-                  <span v-if="item.files.length === 0" class="dim">—</span>
-                </td>
-                <td>
-                  <span class="tag" :class="`tag--${statusTone(item.status)}`">
-                    {{ statusLabel(item.status) }}
-                  </span>
-                </td>
-                <td class="num dim">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+                    <button class="row-link" type="button" @click="detail = item">
+                      {{ item.id }}
+                    </button>
+                  </td>
+                  <!--
+                    外面必须是 <td>，里面再套一层 flex。
+                    直接把 <td> 设成 display:flex 会让它不再是 table-cell，
+                    行分隔线与列对齐会跟着断掉。
+                  -->
+                  <td class="num">
+                    <div class="submitter">
+                      <!--
+                        匿名标识是 `a:<uuid>`，38 个字符，远超这一列宽度，必须截断。
+                        标签不能跟着被截 —— 它才是这一列真正要看的信息。
+                      -->
+                      <CellText class="submitter__id" :text="item.submitter" />
+                      <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
+                    </div>
+                  </td>
+                  <td class="num kind-cell">
+                    <CellText :text="item.kind" />
+                  </td>
+                  <td class="payload-cell">
+                    <CellText :text="payloadSummary(item.payload)" />
+                  </td>
+                  <td>
+                    <a
+                      v-for="file in item.files"
+                      :key="file.id"
+                      class="mono file-link"
+                      :href="attachmentUrl(item.id, file.id)"
+                    >
+                      {{ file.original_name }}
+                    </a>
+                    <span v-if="item.files.length === 0" class="dim">—</span>
+                  </td>
+                  <td>
+                    <span class="tag" :class="`tag--${statusTone(item.status)}`">
+                      {{ statusLabel(item.status) }}
+                    </span>
+                  </td>
+                  <td class="num dim">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
-        <!--
-          列表底部**分两行**：操作一行、翻页一行。
-          挤成一行时三个控件组连成一片，"作用于勾选"和"跳到第几页"混在一起读不通。
-          这一行由视图自己渲染而不是塞进 Pager 的插槽 —— 只有这里知道该怎么分行。
-        -->
-        <div class="pick">
-          <span class="num dim pick__count">已选 {{ selected.size }} 行</span>
-          <button
-            class="btn btn--ghost btn--small"
-            type="button"
-            :disabled="selected.size === 0"
-            title="把选中的行加入队列，之后对队列统一处理。翻页、换筛选都不会丢。"
-            @click="enqueue"
-          >
-            放入队列
-          </button>
-          <button
-            class="btn btn--ghost btn--small"
-            type="button"
-            :disabled="selected.size === 0"
-            title="把选中的行移出队列。"
-            @click="dequeue"
-          >
-            移出队列
-          </button>
-        </div>
+          <!--
+            列表底部**分两行**：操作一行、翻页一行。
+            挤成一行时三个控件组连成一片，"作用于勾选"和"跳到第几页"混在一起读不通。
+            这一行由视图自己渲染而不是塞进 Pager 的插槽 —— 只有这里知道该怎么分行。
+          -->
+          <div class="pick">
+            <span class="num dim pick__count">已选 {{ selected.size }} 行</span>
+            <button
+              class="btn btn--ghost btn--small"
+              type="button"
+              :disabled="selected.size === 0"
+              title="把选中的行加入队列，之后对队列统一处理。翻页、换筛选都不会丢。"
+              @click="enqueue"
+            >
+              放入队列
+            </button>
+            <button
+              class="btn btn--ghost btn--small"
+              type="button"
+              :disabled="selected.size === 0"
+              title="把选中的行移出队列。"
+              @click="dequeue"
+            >
+              移出队列
+            </button>
+          </div>
 
-        <Pager
-          :page="page"
-          :page-size="pageSize"
-          :total="total"
-          @update:page="onPageChange"
-          @update:page-size="onPageSizeChange"
-        />
+          <Pager
+            :page="page"
+            :page-size="pageSize"
+            :total="total"
+            @update:page="onPageChange"
+            @update:page-size="onPageSizeChange"
+          />
+        </div>
       </div>
 
       <!--
@@ -635,11 +703,37 @@ onMounted(async () => {
   font-size: 13px;
 }
 
+/*
+  筛选面板是两行横向 flex：三个筛选一行，内容搜索一行。
+
+  用 flex 而不是 `auto-fit` 网格：这里一共就三个筛选，网格的列数由阈值算出来，
+  既不好预测、也容易被容器宽度牵着走（右侧面板一拖宽，三个框就一起变窄）。
+  `flex: 1 1 200px` 让三者等分且各自不低于 200px，实在放不下才换行。
+*/
 .filters {
   padding: 16px 18px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 14px;
+}
+
+.filters__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* 第一行的三个筛选等分；第二行的按钮按内容宽，只有搜索框伸展 */
+.filters__row > :not(button) {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+/* 搜索框吃掉整行的剩余宽度，按钮不跟着拉长 */
+.filters__search {
+  flex: 1 1 240px;
+  min-width: 0;
 }
 
 /*

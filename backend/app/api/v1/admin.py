@@ -279,10 +279,11 @@ def list_submissions(
     submitter: str | None = None,
     created_from: datetime | None = None,
     created_to: datetime | None = None,
+    q: str | None = Query(default=None, description="在提交内容里做子串匹配"),
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> SubmissionListResponse:
-    """按活动、分类标签、状态、提交者与时间范围筛选。"""
+    """按活动、分类标签、状态、提交者、时间范围与内容关键词筛选。"""
     service = _submission_service(settings, storage)
     statement = service.submissions.list_for_event(
         session,
@@ -292,6 +293,7 @@ def list_submissions(
         submitter=submitter,
         created_from=created_from,
         created_to=created_to,
+        payload_contains=q,
     )
     total = session.scalar(
         select(func.count()).select_from(statement.subquery())

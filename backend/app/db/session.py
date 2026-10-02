@@ -6,6 +6,7 @@ Database 并覆盖依赖，不必污染进程级状态。
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -22,7 +23,19 @@ def is_sqlite_url(url: str) -> bool:
 
 
 def create_db_engine(url: str) -> Engine:
-    kwargs: dict[str, Any] = {"future": True}
+    kwargs: dict[str, Any] = {
+        "future": True,
+        # JSON 列不转义非 ASCII。
+        #
+        # 默认的 `json.dumps` 会把中文写成 `\uXXXX`，于是：
+        #   1. 对内容做文本搜索时，搜中文永远匹配不上（存的是转义形式）
+        #   2. 与 `canonical_json` 不一致 —— 体积校验按**未转义**的字节数算，
+        #      库里却存着更长的转义形式
+        # 读回来是一样的，所以这是一次纯粹的存储形态修正。
+        "json_serializer": lambda obj: json.dumps(
+            obj, ensure_ascii=False, separators=(",", ":")
+        ),
+    }
     if is_sqlite_url(url):
         # FastAPI 的同步端点跑在线程池里，连接会被不同线程借出借入
         kwargs["connect_args"] = {"check_same_thread": False}

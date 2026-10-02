@@ -78,6 +78,8 @@ export interface AdminSubmissionFilters {
   kind?: string
   /** 审核状态码，取值见 @/domain/submission */
   status?: number
+  /** 在提交内容里做子串匹配。空串会被后端当作"没给" */
+  q?: string
   submitter?: string
   page?: number
   page_size?: number

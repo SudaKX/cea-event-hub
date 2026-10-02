@@ -169,6 +169,121 @@ class TestSubmissionListing:
         assert files[0]["original_name"] == "a.txt"
         assert files[0]["size_bytes"] == 5
 
+    def test_search_finds_chinese_in_the_payload(
+        self, admin_client, anon_client, test_db
+    ) -> None:
+        """这是搜索的主要用途，也是它最容易悄悄坏掉的地方。
+
+        JSON 列若按默认的 `json.dumps` 序列化，中文会变成 `\\uXXXX`，于是搜"张三"
+        永远匹配不上（库里存的是 `\\u5f20\\u4e09`）。表现是功能"在"，但对中文完全
+        无效 —— 因此这条测试用真正的中文，而不是 ASCII。
+        """
+        _seed_event(test_db)
+        _submit(anon_client, {"name": "张三", "note": "想来"})
+        _submit(anon_client, {"name": "李四", "note": "想来"})
+
+        body = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions", params={"q": "张三"}
+        ).json()
+
+        assert body["total"] == 1
+        assert body["submissions"][0]["payload"]["name"] == "张三"
+
+    def test_search_matches_any_position_in_the_payload(
+        self, admin_client, anon_client, test_db
+    ) -> None:
+        """子串匹配，不是前缀匹配：payload 没有字段级契约，搜的也不该只是某个键。"""
+        _seed_event(test_db)
+        _submit(anon_client, {"name": "王五", "intro": "想学嵌入式"})
+        _submit(anon_client, {"name": "赵六", "intro": "想学排版"})
+
+        body = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions", params={"q": "嵌入式"}
+        ).json()
+        assert body["total"] == 1
+
+        # 键名本身也在被搜索的文本里
+        body = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions", params={"q": "intro"}
+        ).json()
+        assert body["total"] == 2
+
+    def test_search_escapes_like_wildcards(self, admin_client, anon_client, test_db) -> None:
+        """`%` 与 `_` 是 LIKE 的元字符，不转义的话搜它们等于搜通配。
+
+        用户搜 `%` 是想找一个百分号，结果却拿到全部记录 —— 这种"静默地给了错误
+        答案"比报错难查得多。
+        """
+        _seed_event(test_db)
+        _submit(anon_client, {"note": "打八折 50% 优惠"})
+        _submit(anon_client, {"note": "没有那个符号"})
+
+        body = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions", params={"q": "50%"}
+        ).json()
+        assert body["total"] == 1, "「%」被当成通配符了"
+
+        body = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions", params={"q": "%"}
+        ).json()
+        assert body["total"] == 1, "单个「%」被当成通配符了"
+
+        body = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions", params={"q": "_"}
+        ).json()
+        assert body["total"] == 0, "「_」被当成通配符了"
+
+    def test_search_is_scoped_to_the_event(self, admin_client, anon_client, test_db) -> None:
+        _seed_event(test_db)
+        _seed_event(test_db, event_id="autumn-2026")
+        _submit(anon_client, {"name": "张三"})
+        _submit(anon_client, {"name": "张三"}, event_id="autumn-2026")
+
+        body = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions", params={"q": "张三"}
+        ).json()
+        assert body["total"] == 1
+        assert body["submissions"][0]["event_id"] == "spring-2026"
+
+    def test_search_combines_with_other_filters(
+        self, admin_client, anon_client, test_db
+    ) -> None:
+        _seed_event(test_db)
+        _submit(anon_client, {"name": "张三"}, kind="signup")
+        _submit(anon_client, {"name": "张三"}, kind="feedback")
+
+        body = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions",
+            params={"q": "张三", "kind": "signup"},
+        ).json()
+        assert body["total"] == 1
+        assert body["submissions"][0]["kind"] == "signup"
+
+    def test_empty_search_does_not_filter(self, admin_client, anon_client, test_db) -> None:
+        # 空串应当等同于"没给"，否则清空输入框会搜到一个空字符串
+        _seed_event(test_db)
+        _submit(anon_client, {"n": 1})
+        _submit(anon_client, {"n": 2})
+
+        assert (
+            admin_client.get(
+                f"{ADMIN}/events/spring-2026/submissions", params={"q": ""}
+            ).json()["total"]
+            == 2
+        )
+
+    def test_search_without_match_returns_empty(
+        self, admin_client, anon_client, test_db
+    ) -> None:
+        _seed_event(test_db)
+        _submit(anon_client, {"n": 1})
+
+        body = admin_client.get(
+            f"{ADMIN}/events/spring-2026/submissions", params={"q": "一定搜不到"}
+        ).json()
+        assert body["total"] == 0
+        assert body["submissions"] == []
+
     def test_plain_user_is_403(self, user_client, test_db) -> None:
         _seed_event(test_db)
         assert user_client.get(f"{ADMIN}/events/spring-2026/submissions").status_code == 403
