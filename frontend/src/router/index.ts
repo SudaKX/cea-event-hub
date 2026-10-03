@@ -42,8 +42,8 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'home',
-    // 根路径没有活动上下文，直接送进管理台入口
-    redirect: { name: 'admin-events' },
+    component: () => import('@/views/HomeView.vue'),
+    meta: { public: true },
   },
   {
     path: '/login',
