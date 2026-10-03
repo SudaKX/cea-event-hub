@@ -423,3 +423,98 @@ describe('通知不挡住底下的内容', () => {
     expect(item).toContain('pointer-events: auto')
   })
 })
+
+describe('卡片流', () => {
+  /*
+    卡片用 **flex 而不是 grid**：grid 的 `repeat(auto-*, minmax(…, 1fr))` 给出的
+    是一组**等宽轨道**，而这几张卡片的内容量差得很远（设置卡有七项，"提交"卡只有
+    两行）—— 等宽会把后者撑出一大截空白。
+
+    flex 允许逐张给基础宽度，设置卡因此能自然地宽出来。
+  */
+  const cardsSource = () =>
+    readFileSync(resolve(srcDir, 'views/admin/EventDetailView.vue'), 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '')
+
+  it('卡片流是 flex 且允许换行', () => {
+    const rule = /\.cards\s*\{[^}]*\}/.exec(cardsSource())?.[0] ?? ''
+
+    expect(rule).toContain('display: flex')
+    // 没有 wrap 就永远只有一行，窄屏直接溢出
+    expect(rule).toContain('flex-wrap: wrap')
+  })
+
+  it('卡片流有宽度上限', () => {
+    // 即使显示器拉到 4K，表单列也不该横跨整个屏幕
+    const rule = /\.cards\s*\{[^}]*\}/.exec(cardsSource())?.[0] ?? ''
+    expect(rule).toContain('max-width')
+  })
+
+  it('整页也限宽，否则页头与卡片对不齐', () => {
+    const css = cardsSource()
+    const page = /\.detail\s*\{[^}]*\}/.exec(css)?.[0] ?? ''
+    expect(page).toContain('max-width')
+  })
+
+  it('卡片高度各随其内容，不被同行拉齐', () => {
+    /*
+      默认的 `stretch` 会把同一行里矮的卡片拉到和最高的一样高。设置卡有七项，
+      "提交"卡只有两行 —— 拉齐之后那张卡会空出一大截。
+    */
+    const rule = /\.cards\s*\{[^}]*\}/.exec(cardsSource())?.[0] ?? ''
+    expect(rule).toContain('align-items: flex-start')
+  })
+
+  it('卡片可以收缩，窄屏不会溢出', () => {
+    /*
+      `flex: 1 1 300px` 里那个 `1`（shrink）与 `min-width: 0` 是配套的：少了它们，
+      卡片会守住内容宽度把容器顶开，窄屏上表现为横向滚动条。
+    */
+    const rule = /\.card\s*\{[^}]*\}/.exec(cardsSource())?.[0] ?? ''
+
+    expect(rule).toMatch(/flex:\s*1\s+1\s+\d/)
+    expect(rule).toContain('min-width: 0')
+  })
+
+  it('设置卡的基础宽度比常规卡大', () => {
+    // "内容多的那张可以拉大" —— 靠的就是逐张给基础宽度，等宽轨道做不到这件事
+    const css = cardsSource()
+    const normal = /\.card\s*\{[^}]*flex:\s*1\s+1\s+(\d+)px/.exec(css)
+    const wide = /\.card--wide\s*\{[^}]*flex:\s*(\d+)\s+1\s+(\d+)px/.exec(css)
+
+    expect(normal).not.toBeNull()
+    expect(wide).not.toBeNull()
+    expect(Number(wide![2])).toBeGreaterThan(Number(normal![1]))
+    // 伸展比例也要更大，否则它只会守住基础宽度、不再随剩余空间长大
+    expect(Number(wide![1])).toBeGreaterThan(1)
+  })
+
+  it('卡片内部的成对字段用 auto-fit', () => {
+    /*
+      与卡片流的目标**相反**：这里要的恰恰是让字段填满一行，宽度够时两列并排、
+      不够时落成一列，两种情况都不留半行空。同一个属性、两种意图 ——
+      这条断言把两者的区别钉住，免得日后有人"统一"成同一种。
+    */
+    const rule = /\.card__grid\s*\{[^}]*\}/.exec(cardsSource())?.[0] ?? ''
+    expect(rule).toContain('auto-fit')
+    expect(rule).not.toContain('auto-fill')
+  })
+
+  it('需要拉齐高度的那条流用 stretch', () => {
+    /*
+      同一条界面上两种诉求都成立：设置卡内容多、旁边几张只有几行，拉齐会让它们
+      空一大截；而"网页内容 / 提交 / 删除活动"排在一起时，参差的底边更显眼。
+    */
+    const rule = /\.cards--even\s*\{[^}]*\}/.exec(cardsSource())?.[0] ?? ''
+    expect(rule).toContain('align-items: stretch')
+  })
+
+  it('卡片操作行贴底且靠右', () => {
+    const rule = /\.card__actions\s*\{[^}]*\}/.exec(cardsSource())?.[0] ?? ''
+
+    expect(rule).toContain('justify-content: flex-end')
+    // 拉齐高度的卡片里，按钮贴底才会落在同一条线上
+    expect(rule).toContain('margin-top: auto')
+  })
+})

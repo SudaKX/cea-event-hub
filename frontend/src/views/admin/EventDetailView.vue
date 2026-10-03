@@ -156,7 +156,10 @@ watch(() => props.eventId, load)
 </script>
 
 <template>
-  <section class="stack">
+  <!--
+    `detail` 给整页一个宽度上限：表单页在宽屏上被拉成一条横线是没法读的。
+  -->
+  <section class="stack detail">
     <header class="head">
       <div>
         <p class="mute head__crumb">
@@ -166,9 +169,6 @@ watch(() => props.eventId, load)
         </p>
         <h1 class="head__title">{{ event?.title ?? '加载中…' }}</h1>
       </div>
-      <button class="btn btn--danger btn--small" type="button" @click="onDeleteEvent">
-        删除活动
-      </button>
     </header>
 
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
@@ -176,132 +176,174 @@ watch(() => props.eventId, load)
     <div v-if="loading" class="panel empty">加载中…</div>
 
     <template v-else-if="event">
-      <!-- 策略 -->
-      <form class="panel block" @submit.prevent="onSave">
-        <h2 class="block__title">提交策略</h2>
+      <!--
+        设置：一个表单、一张卡片。
 
-        <div class="grid">
-          <label class="field">
-            <span class="field__label">标题</span>
-            <input v-model="form.title" required />
-          </label>
-
-          <Select v-model="form.status" label="状态" :options="STATUS_OPTIONS" />
-        </div>
-
-        <div class="grid">
-          <Select
-            v-model="form.visibility"
-            label="可见性"
-            :options="EVENT_VISIBILITY_OPTIONS"
-          />
-
-          <div class="field">
-            <span class="field__label">&nbsp;</span>
-            <span class="field__hint dim">
-              不公开的活动<strong>不出现在任何公开面</strong>，但知道标识的人仍可
-              直接用链接打开 —— 也就是"未公开"，不是"不存在"。置顶的另进首页卡片区。
-            </span>
-          </div>
-        </div>
-
-        <label class="field">
-          <span class="field__label">简介</span>
-          <textarea v-model="form.summary" />
-        </label>
-
-        <div class="grid">
-          <label class="field">
-            <span class="field__label">条数上限<span class="dim">（留空取默认）</span></span>
-            <input v-model="form.max_submissions" type="number" min="0" />
-            <span class="field__hint dim">当前：{{ quotaText }}</span>
-          </label>
-
-          <label class="field">
-            <span class="field__label">
-              每人最多<span class="dim">（留空不限）</span>
-            </span>
-            <input v-model="form.max_per_submitter" type="number" min="1" />
-          </label>
-        </div>
-
-        <!--
-          这条限制的边界必须写在界面上，否则管理员会以为它是硬限制。
-          放在"提交需要登录"旁边正是因为它与那个开关直接相关。
-        -->
-        <p class="dim note">
-          「每人最多」对<strong>匿名</strong>活动只能防误操作：匿名提交者的身份由
-          客户端自报，换一个浏览器即可绕过。要真正限制，请勾选下面的"提交需要登录"
-          —— 那时提交者是可核实的登录用户。
-        </p>
-
-        <div class="grid">
+        这几项本来就互相牵制（可见性影响谁找得到、配额影响谁能交、是否要求登录
+        又决定了个人限额可不可信），摆在一起比拆开更容易看清全貌。
+      -->
+      <form class="cards" @submit.prevent="onSave">
+        <section class="panel card card--wide">
+          <h2 class="card__title">设置</h2>
 
           <!--
-            复选框自成一行控件：给它一个和输入框等高的行，标签才不会在两列网格里
-            被挤着折行。原来它是裸的 <input>，被 .field input 的 width:100% 撑满，
-            文字只剩几像素。
+            卡片内部的成对字段用 `auto-fit`：这里要的**恰恰是**让字段填满一行。
+            与卡片流用 `auto-fill` 的目标相反 —— 那边是"别把卡片撑宽"，这边是
+            "别在窄卡片里留半行空"。同一个属性、两种意图，混用会两边都不对。
           -->
-          <div class="field">
-            <span class="field__label">提交</span>
-            <div class="toggle-row">
-              <Checkbox v-model="form.submission_requires_login" label="提交需要登录" />
-              <span class="toggle-row__text" @click="form.submission_requires_login = !form.submission_requires_login">
-                提交需要登录
+          <div class="card__grid">
+            <label class="field">
+              <span class="field__label">标题</span>
+              <input v-model="form.title" required />
+            </label>
+
+            <Select v-model="form.status" label="状态" :options="STATUS_OPTIONS" />
+
+            <Select
+              v-model="form.visibility"
+              label="可见性"
+              :options="EVENT_VISIBILITY_OPTIONS"
+            />
+
+            <label class="field">
+              <span class="field__label">条数上限<span class="dim">（留空取默认）</span></span>
+              <input v-model="form.max_submissions" type="number" min="0" />
+              <span class="field__hint dim">当前：{{ quotaText }}</span>
+            </label>
+
+            <label class="field">
+              <span class="field__label">
+                每人最多<span class="dim">（留空不限）</span>
               </span>
+              <input v-model="form.max_per_submitter" type="number" min="1" />
+            </label>
+
+            <!--
+              复选框自成一行控件：裸的 <input type="checkbox"> 会被 .field input 的
+              width:100% 撑满整行，把标签文字挤到只剩几像素、疯狂折行。
+            -->
+            <div class="field">
+              <span class="field__label">是否允许匿名提交</span>
+              <div class="toggle-row">
+                <Checkbox v-model="form.submission_requires_login" label="提交需要登录" />
+                <span
+                  class="toggle-row__text"
+                  @click="form.submission_requires_login = !form.submission_requires_login"
+                >
+                  提交需要登录
+                </span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <button class="btn btn--primary" type="submit" :disabled="busy">保存</button>
+          <label class="field">
+            <span class="field__label">简介</span>
+            <textarea v-model="form.summary" />
+          </label>
+
+          <p class="card__note dim">
+            不公开的活动<strong>不出现在任何公开面</strong>，但知道标识的人仍可直接
+            用链接打开 —— 也就是"未公开"，不是"不存在"。置顶的另进首页卡片区。
+          </p>
+
+          <!--
+            这条限制的边界必须写在界面上，否则管理员会以为它是硬限制。
+          -->
+          <p class="card__note dim">
+            「每人最多」对<strong>匿名</strong>活动只能防误操作：匿名提交者的身份由
+            客户端自报，换一个浏览器即可绕过。要真正限制，请勾选"提交需要登录"
+            —— 那时提交者是可核实的登录用户。
+          </p>
+
+          <div class="card__actions">
+            <button class="btn btn--primary" type="submit" :disabled="busy">保存</button>
+          </div>
+        </section>
       </form>
 
-      <!-- 内容投放 -->
-      <div class="panel block">
-        <h2 class="block__title">网页内容</h2>
-        <p class="mute block__lead">
-          上传 zip 整体替换活动内容目录，版本号会递增。校验不通过时目录**完全不被触碰**。
-        </p>
-
-        <div class="row">
-          <FileInput v-model="archive" accept=".zip" label="选择 zip" />
-          <button class="btn btn--primary" type="button" :disabled="busy || !archive" @click="onDeploy">
-            {{ busy ? '投放中…' : '投放' }}
-          </button>
-        </div>
-
-        <p v-if="files.length === 0" class="empty">还没有投放内容。</p>
-        <ul v-else class="files">
-          <li v-for="file in files" :key="file.path" class="files__item">
-            <span class="mono grow">{{ file.path }}</span>
-            <span class="num dim">{{ file.size_bytes }} B</span>
-          </li>
-        </ul>
-      </div>
-
       <!--
-        提交：这里只留入口，列表与审核都在「提交」页。
-        同一份列表放两处，两边迟早会漂移出不一致（筛选、分页、权限各自一套）。
+        与设置无关的独立操作。单独一个卡片流：它们的操作各自即时生效，不参与上面
+        那次保存，混在同一个表单里会让人以为要一起提交。
       -->
-      <div class="panel block">
-        <div class="block__row">
-          <div class="block__head">
-            <h2 class="block__title">提交</h2>
-            <p class="mute block__lead">当前配额：{{ quotaText }}</p>
+      <div class="cards cards--even">
+        <section class="panel card">
+          <h2 class="card__title">网页内容</h2>
+          <p class="card__note mute">
+            上传 zip 整体替换活动内容目录，版本号会递增。校验不通过时目录**完全不被
+            触碰**。
+          </p>
+
+          <div class="row">
+            <FileInput v-model="archive" accept=".zip" label="选择 zip" />
+            <button
+              class="btn btn--primary"
+              type="button"
+              :disabled="busy || !archive"
+              @click="onDeploy"
+            >
+              {{ busy ? '投放中…' : '投放' }}
+            </button>
           </div>
+
+          <p v-if="files.length === 0" class="empty">还没有投放内容。</p>
+          <ul v-else class="files">
+            <li v-for="file in files" :key="file.path" class="files__item">
+              <span class="mono grow">{{ file.path }}</span>
+              <span class="num dim">{{ file.size_bytes }} B</span>
+            </li>
+          </ul>
+        </section>
+
+        <!--
+          提交：这里只留入口，列表与审核都在「提交」页。
+          同一份列表放两处，两边迟早会漂移出不一致（筛选、分页、权限各自一套）。
+        -->
+        <section class="panel card">
+          <h2 class="card__title">提交</h2>
+          <p class="card__note mute">当前配额：{{ quotaText }}</p>
           <RouterLink
             class="btn btn--ghost btn--control"
             :to="{ name: 'admin-submissions', query: { event: eventId } }"
           >
             查看该活动的提交
           </RouterLink>
-        </div>
+        </section>
+
+        <!--
+          删除从页头挪进卡片：它在页头时离标题很远、没有任何说明，是个容易被误点
+          的位置。放进卡片之后，"点错了会发生什么"就写在按钮上方。
+        -->
+        <section class="panel card card--danger">
+          <h2 class="card__title">删除活动</h2>
+          <p class="card__note dim">
+            连同该活动的<strong>全部提交与附件</strong>一并移除，内容目录也会清空。
+            此操作<strong>不可撤销</strong>。
+          </p>
+          <div class="card__actions">
+            <button
+              class="btn btn--danger"
+              type="button"
+              :disabled="busy"
+              @click="onDeleteEvent"
+            >
+              删除活动
+            </button>
+          </div>
+        </section>
       </div>
     </template>
   </section>
 </template>
 
 <style scoped>
+/*
+  整页的宽度上限。表单页在宽屏上被拉成一条横线是没法读的，而卡片流本身的上限
+  只管得住卡片、管不住页头。
+*/
+.detail {
+  max-width: 1080px;
+}
+
 .head {
   display: flex;
   align-items: flex-start;
@@ -318,45 +360,115 @@ watch(() => props.eventId, load)
   font-size: 20px;
 }
 
-.block {
-  padding: 20px;
+/*
+  卡片流：**flex 而不是 grid**。
+
+  grid 的 `repeat(auto-*, minmax(…, 1fr))` 给出的是一组**等宽轨道**，卡片无论内容
+  多少都占一样宽。而这几张卡片的内容量差得很远：设置卡有七项，"提交"卡只有两行
+  —— 等宽会把后者撑出一大截空白。
+
+  flex 允许**逐张给基础宽度**：设置卡基础更宽、伸展比例也更大，于是它自然占据
+  大半个行宽，其余的紧凑排在旁边。换行交给 `flex-wrap`，窄屏时自动落成一列。
+
+  `max-width` 仍然要：即使显示器拉到 4K，表单列也不该横跨整个屏幕。
+*/
+.cards {
+  display: flex;
+  flex-wrap: wrap;
+  /* 各随内容，不把同一行里矮的卡片拉到和最高的一样高 */
+  align-items: flex-start;
+  gap: 16px;
+  max-width: 1080px;
+}
+
+/*
+  需要**高度统一**的那一条卡片流。
+
+  与默认的 `flex-start` 相反：那里是"各随内容"，这里是"同一行拉到一样高"。
+  两种诉求在同一个界面上都成立 —— 设置卡内容多、旁边几张只有几行，拉齐会让它们
+  空一大截；而"网页内容 / 提交 / 删除活动"三张排在一起时，参差不齐的底边更显眼。
+*/
+.cards--even {
+  align-items: stretch;
+}
+
+.card {
+  /*
+    基础宽度 300px，可伸可缩。
+
+    `flex-shrink` 不为 0 是必需的（也就是不要写 `flex: 0 0 …`）：窄屏时卡片要能
+    缩进容器里，否则整行会溢出。`min-width: 0` 同理 —— 它允许卡片被压到比内容
+    更窄，而不是把容器顶开。
+  */
+  flex: 1 1 300px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  padding: 18px 20px 20px;
 }
 
-.block__title {
+/* 设置卡：内容最多，基础更宽、伸展比例也更大 */
+.card--wide {
+  flex: 2 1 460px;
+}
+
+.card__title {
   font-size: 14px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mute);
 }
 
-/* 标题 + 说明在左、操作在右。按钮与输入框同高，视觉上才压得住这一行 */
-.block__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
+/*
+  卡片里的说明文字。行距交给卡片的 `gap`，**不用负边距** —— 负边距是配某个特定
+  间隙写死的，卡片间距一改就会把两行挤到一起。踩过一次（见 git 记录里的
+  `.block__lead`）。
+*/
+.card__note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+.card__note strong {
+  color: var(--bone);
 }
 
 /*
-  标题与说明之间的行距交给 gap，不用负边距。
-  `.block__lead` 自带的 -6px 是配 `.block` 的 14px 间隙用的（净剩 8px）；搬进这里
-  之后父级不再是那个 flex 容器，负边距直接把两行挤到一起。
+  卡片内部成对字段的排布。
+
+  `auto-fit` 在这里是**对**的：卡片只有三百多像素时落成一列，宽一些时两列并排，
+  两种情况都不会留下半行空 —— 这正是 `auto-fit` 折叠空轨道的行为。与卡片流那边
+  "别把卡片撑宽"的目标相反。
 */
-.block__head {
+.card__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+/* 卡片自己的操作行：贴底、靠右 */
+.card__actions {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  /*
+    `auto` 把这一行推到底部。高度被拉齐的卡片（见 `.cards--even`）里内容只占
+    上半截，按钮跟在内容后面会悬在中间；贴底之后几张卡的按钮落在同一条线上 ——
+    那才是"高度统一"看起来对的样子。
+    卡片高度恰好等于内容时没有富余空间，`auto` 不起作用。
+  */
+  margin-top: auto;
 }
 
-.block__head .block__lead {
-  margin: 0;
+/* 危险操作的卡片：只在左侧加一条警示边，不把整张卡染红 */
+.card--danger {
+  border-left: 3px solid var(--red);
 }
 
-/* 复选框那一行要占满输入框的高度，两列网格才对得齐 */
+/* 复选框那一行要占满输入框的高度 */
 .toggle-row {
   display: flex;
   align-items: center;
@@ -370,26 +482,6 @@ watch(() => props.eventId, load)
   user-select: none;
 }
 
-.block__lead {
-  margin: -6px 0 0;
-  font-size: 13px;
-}
-
-.note {
-  margin: 0 0 14px;
-  font-size: 12.5px;
-  line-height: 1.8;
-}
-
-.note strong {
-  color: var(--bone);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
-}
 
 .files {
   list-style: none;
