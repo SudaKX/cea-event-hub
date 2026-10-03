@@ -19,7 +19,7 @@ vi.mock('@/api/submissions', () => ({
   mySubmissions: (...args: unknown[]) => mySubmissions(...args),
 }))
 
-import { BridgeError, BridgeHost, mapApiError } from './host'
+import { BridgeError, BridgeHost, TOAST_MAX_LENGTH, mapApiError } from './host'
 import { BRIDGE_ERROR, BRIDGE_OP, HOST_MESSAGE, IFRAME_MESSAGE, PROTOCOL_VERSION } from './protocol'
 import { ApiError } from '@/api/client'
 
@@ -58,6 +58,7 @@ interface Harness {
   onVersionMismatch: ReturnType<typeof vi.fn>
   onReady: ReturnType<typeof vi.fn>
   onNavigate: ReturnType<typeof vi.fn>
+  onToast: ReturnType<typeof vi.fn>
 }
 
 function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {}): Harness {
@@ -78,6 +79,7 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
   const onVersionMismatch = vi.fn()
   const onReady = vi.fn()
   const onNavigate = vi.fn()
+  const onToast = vi.fn()
 
   const host = new BridgeHost({
     iframe,
@@ -97,6 +99,7 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
     onVersionMismatch,
     onReady,
     onNavigate,
+    onToast,
     requestTimeoutMs: 50,
     readyTimeoutMs: 20,
   })
@@ -109,6 +112,7 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
     onVersionMismatch,
     onReady,
     onNavigate,
+    onToast,
   }
 }
 
@@ -678,6 +682,104 @@ describe('活动页请求的其它消息', () => {
       payload: { to: 'https://evil.example.com' },
     })
     expect(harness.onNavigate).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('活动页的提示（CEA.toast）', () => {
+  /*
+    通知渲染在 iframe **之外**、宿主的界面里 —— 这是不受信内容唯一能写到宿主界面
+    上的口子。下面几条把这个口子的边界钉住。
+  */
+  function fireToast(harness: Harness, payload: unknown): void {
+    postFrom(harness.iframe.contentWindow, {
+      v: PROTOCOL_VERSION,
+      type: IFRAME_MESSAGE.TOAST,
+      payload,
+    })
+  }
+
+  function start(): Harness {
+    vi.clearAllMocks()
+    const harness = makeHost()
+    harness.host.start()
+    return harness
+  }
+
+  it('把活动页的提示转给宿主', () => {
+    const harness = start()
+    fireToast(harness, { level: 'ok', message: '提交成功' })
+
+    expect(harness.onToast).toHaveBeenCalledWith({ level: 'ok', message: '提交成功' })
+  })
+
+  it('认不出来的语气当 info，而不是丢掉整条', () => {
+    // 提示本身无害；为多写一个字就把整条丢掉，只会让作者摸不着头脑
+    const harness = start()
+    fireToast(harness, { level: 'success', message: '提交成功' })
+    fireToast(harness, { message: '没有语气' })
+
+    expect(harness.onToast).toHaveBeenNthCalledWith(1, { level: 'info', message: '提交成功' })
+    expect(harness.onToast).toHaveBeenNthCalledWith(2, { level: 'info', message: '没有语气' })
+  })
+
+  it('超长正文被截断', () => {
+    // 通知是浮层，几千字的提示会把整屏占满
+    const harness = start()
+    fireToast(harness, { level: 'info', message: 'あ'.repeat(5000) })
+
+    const [payload] = harness.onToast.mock.calls[0]!
+    expect((payload as { message: string }).message).toHaveLength(TOAST_MAX_LENGTH)
+  })
+
+  it('空正文与空白正文都不弹', () => {
+    const harness = start()
+    fireToast(harness, { level: 'info', message: '   ' })
+    fireToast(harness, { level: 'info' })
+    fireToast(harness, {})
+    fireToast(harness, null)
+
+    expect(harness.onToast).not.toHaveBeenCalled()
+  })
+
+  it('十秒内超过 5 条会被丢弃', () => {
+    /*
+      真正的影响不是"吵"，而是**宿主自己的提示被挤掉** —— 通知栈有显示上限，
+      活动页刷屏会把"已保存"这类宿主提示顶出去。
+    */
+    const harness = start()
+    for (let index = 1; index <= 8; index++) {
+      fireToast(harness, { level: 'info', message: `第 ${index} 条` })
+    }
+
+    expect(harness.onToast).toHaveBeenCalledTimes(5)
+    expect(harness.onToast).toHaveBeenLastCalledWith({ level: 'info', message: '第 5 条' })
+  })
+
+  it('过了窗口之后重新放行', () => {
+    vi.useFakeTimers()
+    try {
+      const harness = start()
+      for (let index = 1; index <= 5; index++) fireToast(harness, { message: `a${index}` })
+      expect(harness.onToast).toHaveBeenCalledTimes(5)
+
+      fireToast(harness, { message: '被挡下' })
+      expect(harness.onToast).toHaveBeenCalledTimes(5)
+
+      vi.advanceTimersByTime(10_001)
+      fireToast(harness, { message: '又行了' })
+      expect(harness.onToast).toHaveBeenCalledTimes(6)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('正文不是字符串时忽略', () => {
+    // 活动页可以发任何东西过来，类型断言在这里不成立
+    const harness = start()
+    fireToast(harness, { level: 'info', message: { toString: () => 'x' } })
+    fireToast(harness, { level: 'info', message: 42 })
+
+    expect(harness.onToast).not.toHaveBeenCalled()
   })
 })
 

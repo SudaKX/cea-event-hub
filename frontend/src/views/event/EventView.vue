@@ -20,6 +20,7 @@ import { CONTENT_BASE } from '@/api/client'
 import { getPublicEvent } from '@/api/events'
 import { BridgeHost } from '@/bridge/host'
 import { getClientId } from '@/bridge/clientId'
+import { useToast } from '@/composables/useToast'
 import { contentEntryExists } from './contentProbe'
 import {
   COMPLETE_HOLD_MS,
@@ -36,6 +37,7 @@ const props = defineProps<{ eventId: string }>()
 
 const router = useRouter()
 const auth = useAuthStore()
+const toast = useToast()
 
 const iframe = ref<HTMLIFrameElement | null>(null)
 const event = ref<EventPublic | null>(null)
@@ -157,10 +159,13 @@ function buildHost(): void {
       // 没有可见的标题栏了，标题落到浏览器标签上
       if (title) document.title = title
     },
-    onToast: (payload) => {
-      // 活动页的提示统一走宿主，避免在沙箱里用 alert
-      console.info('[event toast]', payload.level ?? 'info', payload.message)
-    },
+    /*
+      活动页的提示统一走宿主的通知栈，而不是在沙箱里用 `alert` —— 这是协议文档
+      指定的做法，也是 `allow-modals` 之外更好的那条路。
+
+      语气与长度已经在桥接层收敛过（`BridgeHost.handleToast`），这里直接渲染。
+    */
+    onToast: ({ level, message }) => toast.push(level, message),
     // 真的连上了：这是收起加载覆盖层的唯一正当理由
     onReady: () => finishLoading(),
     onBridgeMissing: () => {

@@ -33,8 +33,7 @@ import {
 } from './protocol'
 import type { EventPublic } from '@/types/api'
 
-export interface BridgeHostOptions {
-  iframe: HTMLIFrameElement
+export interface BridgeHostOptions {  iframe: HTMLIFrameElement
   /** 从**宿主路由**取活动标识；这里用回调而不是值，避免活动切换后失效 */
   eventId: () => string
   apiBase: string
@@ -42,7 +41,13 @@ export interface BridgeHostOptions {
   identity: () => IdentityDescriptor
   theme: () => Record<string, string>
   onNavigate?: (to: string) => void
-  onToast?: (payload: { level?: string; message: string }) => void
+  /**
+   * 活动页请求弹一条提示。
+   *
+   * `level` 已经收敛到宿主认识的三种语气之一，`message` 也已经截断到上限 ——
+   * 调用方不必再校验，直接渲染即可。
+   */
+  onToast?: (payload: { level: BridgeToastLevel; message: string }) => void
   onTitle?: (title: string) => void
   /**
    * 活动页完成握手（发出就绪消息且协议主版本兼容）。
@@ -67,6 +72,21 @@ interface PendingRequest {
   reject: (reason: unknown) => void
   timer: ReturnType<typeof setTimeout>
   controller: AbortController
+}
+
+/** 活动页能请求的通知语气。与宿主的通知音调一一对应。 */
+export type BridgeToastLevel = 'ok' | 'info' | 'error'
+
+/** 通知正文的长度上限。通知是浮层，再长也读不完，只会把屏幕占满。 */
+export const TOAST_MAX_LENGTH = 200
+
+/** 频率限制的窗口与配额。 */
+const TOAST_WINDOW_MS = 10_000
+const TOAST_MAX_PER_WINDOW = 5
+
+/** 认不出来的语气一律当 info —— 提示本身无害，没必要为多写一个字整条丢掉。 */
+function normalizeToastLevel(level: unknown): BridgeToastLevel {
+  return level === 'ok' || level === 'error' ? level : 'info'
 }
 
 /** 活动页拿到的结构化错误。活动页不需要解析 HTTP 状态码。 */
@@ -118,6 +138,13 @@ export class BridgeHost {
   private eventPromise: Promise<EventPublic> | null = null
   private disposed = false
   private sequence = 0
+  /**
+   * 活动页最近几次请求弹提示的时刻。
+   *
+   * 活动页是不受信内容，而通知浮在宿主界面上。没有这道闸，一个坏掉的循环就能把
+   * 通知栈刷爆 —— 真正的影响不是"吵"，而是**宿主自己的提示被挤掉**。
+   */
+  private toastTimes: number[] = []
 
   constructor(options: BridgeHostOptions) {
     this.options = options
@@ -221,8 +248,33 @@ export class BridgeHost {
   }
 
   private handleToast(message: Envelope): void {
-    const payload = message.payload as { level?: string; message?: string } | undefined
-    if (payload?.message) this.options.onToast?.({ level: payload.level, message: payload.message })
+    /*
+      活动页是**不受信内容**，而通知渲染在 iframe 之外、宿主的界面里 —— 这是
+      它能写到宿主界面上的唯一一个口子。三道收敛：
+
+        1. 语气收敛到已知取值，认不出来的一律当 info（不拒绝：提示本身无害，
+           没必要因为多写了一个字就整条丢掉）
+        2. 长度截断。通知是浮层，几千字的提示会把整屏占满
+        3. 频率限制。坏掉的循环或恶意页面否则能把通知栈刷爆，把宿主自己的
+           提示挤掉 —— 那才是真正的影响：**宿主的话被淹没了**
+
+      刻意**不做**的事：不因为"来自活动页"就加视觉标记。协议文档把 `CEA.toast`
+      定位成替代 `alert()` 的正规做法，给它打上可疑的标签会让正常用法也跟着
+      显得可疑；而没有可点内容、又会自动消失的纯文本，风险仅限于"看一眼"。
+    */
+    const payload = message.payload as { level?: unknown; message?: unknown } | undefined
+    const text = typeof payload?.message === 'string' ? payload.message.trim() : ''
+    if (!text) return
+
+    const now = Date.now()
+    this.toastTimes = this.toastTimes.filter((at) => now - at < TOAST_WINDOW_MS)
+    if (this.toastTimes.length >= TOAST_MAX_PER_WINDOW) return
+    this.toastTimes.push(now)
+
+    this.options.onToast?.({
+      level: normalizeToastLevel(payload?.level),
+      message: text.slice(0, TOAST_MAX_LENGTH),
+    })
   }
 
   private handleCancel(message: Envelope): void {

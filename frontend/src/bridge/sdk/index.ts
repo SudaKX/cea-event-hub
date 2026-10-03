@@ -299,7 +299,17 @@ const api: CeaApi = {
     return bridge.call(op, args, options.onProgress)
   },
 
-  toast(message: string, level: 'info' | 'error' = 'info') {
+  /**
+   * 弹一条提示，由宿主渲染在其界面上。
+   *
+   * **这是替代 `alert()` 的做法。** 沙箱里虽然允许 `alert`（`allow-modals`），
+   * 但它的样式与站点无关、还会阻塞整个页面的脚本 —— 对"提交成功"这类反馈来说
+   * 代价太大。
+   *
+   * `level` 决定语气：`ok` 成功、`error` 失败、`info` 中性（默认）。宿主对
+   * 频率与长度都有限制：十秒内超过 5 条会被丢弃，正文截断到 200 字。
+   */
+  toast(message: string, level: 'ok' | 'info' | 'error' = 'info') {
     void bridge.call('event.info').catch(() => undefined) // 确保已就绪再发
     window.parent.postMessage(
       { v: PROTOCOL_VERSION, type: IFRAME_MESSAGE.TOAST, payload: { message, level } },

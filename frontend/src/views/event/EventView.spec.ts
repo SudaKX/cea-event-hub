@@ -24,6 +24,7 @@ vi.mock('./contentProbe', () => ({
 
 import { ApiError } from '@/api/client'
 import { PROTOCOL_VERSION } from '@/bridge/protocol'
+import { useToast } from '@/composables/useToast'
 import { COMPLETE_HOLD_MS } from './loadingProgress'
 import EventView from './EventView.vue'
 
@@ -269,6 +270,7 @@ describe('加载失败', () => {
     expect(overlay.attributes('role')).toBe('alert')
 
     // 进度条在错误态没有意义，收掉
+    // 进度条在错误态没有意义，收掉
     expect(wrapper.find('.event__progress').exists()).toBe(false)
 
     // 不会自己消失
@@ -282,5 +284,57 @@ describe('加载失败', () => {
 
     expect(router.currentRoute.value.name).toBe('not-found')
     wrapper.unmount()
+  })
+})
+
+
+describe('活动页的提示', () => {
+  /*
+    `CEA.toast` 是活动页唯一能写到宿主界面上的东西 —— 通知渲染在 iframe 之外。
+    接线断了的话，活动页的所有提示都会静默消失，而页面看起来一切正常。
+  */
+  it('活动页请求的提示进入宿主的通知栈', async () => {
+    useToast().clear()
+    try {
+      const { wrapper, settle } = await mountView()
+      await settle()
+      await loadIframe(wrapper)
+      sendReady(wrapper)
+      await flush()
+
+      postFromIframe(wrapper, {
+        v: PROTOCOL_VERSION,
+        type: 'event:toast',
+        payload: { level: 'ok', message: '提交成功' },
+      })
+
+      expect(useToast().toasts.value).toHaveLength(1)
+      expect(useToast().toasts.value[0]).toMatchObject({ tone: 'ok', message: '提交成功' })
+      wrapper.unmount()
+    } finally {
+      useToast().clear()
+    }
+  })
+
+  it('失败语气的提示同样是失败', async () => {
+    useToast().clear()
+    try {
+      const { wrapper, settle } = await mountView()
+      await settle()
+      await loadIframe(wrapper)
+      sendReady(wrapper)
+      await flush()
+
+      postFromIframe(wrapper, {
+        v: PROTOCOL_VERSION,
+        type: 'event:toast',
+        payload: { level: 'error', message: '提交失败' },
+      })
+
+      expect(useToast().toasts.value[0]).toMatchObject({ tone: 'error', message: '提交失败' })
+      wrapper.unmount()
+    } finally {
+      useToast().clear()
+    }
   })
 })
