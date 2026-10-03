@@ -14,9 +14,24 @@ class RegisterRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
     display_name: str | None = Field(default=None, max_length=64)
-    email: str | None = Field(default=None, max_length=255)
-    # 仅当配置启用了邀请码时才校验
-    invite_code: str | None = Field(default=None, max_length=128)
+    # **必填**：注册要经邮箱验证才算完成，而验证的对象就是它。没有"仅凭用户名
+    # 注册"的降级路径
+    email: str = Field(min_length=1, max_length=255)
+
+
+class RegistrationPendingResponse(BaseModel):
+    """注册请求已受理。
+
+    `ongoing` 为真表示这是**重入** —— 同一对用户名与邮箱已有一条待验证的占位，
+    本次没有新建、也没有重发邮件。前端据此把文案从"邮件已发送"改成
+    "我们已经发过一封"，否则用户会去邮箱里找一封并不存在的新邮件。
+    """
+
+    ongoing: bool = False
+
+
+class VerifyRegistrationRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
 
 
 class LoginRequest(BaseModel):
@@ -122,6 +137,7 @@ __all__ = [
     "ForgotPasswordRequest",
     "LoginRequest",
     "RegisterRequest",
+    "RegistrationPendingResponse",
     "ResetPasswordRequest",
     "UserBulkRequest",
     "ResetTokenResponse",
@@ -131,4 +147,5 @@ __all__ = [
     "UserEnvelope",
     "UserListResponse",
     "UserUpdateRequest",
+    "VerifyRegistrationRequest",
 ]

@@ -47,6 +47,8 @@ class TestNamingConvention:
             # 单个提交者的份数计数器。它存在的理由是**原子性**（单语句 CAS），
             # 不是性能 —— 详见模型上的说明
             "submitter_quotas",
+            # 待验证的注册占位。注册分两阶段，这张表就是"已提交但还没验证"那一半
+            "pending_registrations",
         }
 
     def test_index_names_are_conventional(self) -> None:
@@ -69,6 +71,11 @@ class TestNamingConvention:
             "uq_users_email",
             "uq_user_tokens_token_hash",
             "uq_submissions_event_id_idem_key",
+            # 待验证的占位要同时保留用户名与邮箱：不锁住的话，两个人能在同一分钟里
+            # 用同一个用户名各自走到验证页，先点链接的赢了、另一个在最后一步才失败
+            "uq_pending_registrations_username",
+            "uq_pending_registrations_email",
+            "uq_pending_registrations_token_hash",
         }
         # sessions.token_hash 是主键而非唯一约束，因此不产生 uq_
         assert "pk_sessions" in {t.primary_key.name for t in Base.metadata.sorted_tables}

@@ -226,6 +226,118 @@ class TestUserTokenRepository:
             assert token_repo.get_by_hash(session, hash_token("email_verify")) is not None
 
 
+class TestPendingRegistrationRepository:
+    """核销的 CAS 条件。
+
+    这些条件**在服务层看起来是多余的** —— 服务层已经按 token_hash 取出那一行、
+    也已经判过有效期。它们真正防的是"检查"与"删除"之间那一瞬：凭据恰好在两者
+    之间过期，或者被并发的另一个请求核销掉。
+
+    单线程的接口测试够不着那个窗口，所以在这里直接断言 —— 否则把条件删掉不会有
+    任何测试变红（这一点是变异测试发现的）。
+    """
+
+    def _pending(self, session, **overrides):
+        from app.db.models import PendingRegistration
+
+        defaults = {
+            "username": "alice",
+            "email": "alice@example.com",
+            "password_hash": "x",
+            "display_name": "alice",
+            "token_hash": "digest",
+            "expires_at": utcnow() + timedelta(minutes=10),
+        }
+        defaults.update(overrides)
+        row = PendingRegistration(**defaults)  # type: ignore[arg-type]
+        session.add(row)
+        session.flush()
+        return row
+
+    def test_claim_succeeds_while_valid(self, test_db) -> None:
+        from app.repositories.users import PendingRegistrationRepository
+
+        repo = PendingRegistrationRepository()
+        with test_db.session() as session:
+            row = self._pending(session)
+            assert repo.claim(
+                session, pending_id=row.id, token_hash="digest", now=utcnow()
+            )
+            assert repo.get_by_token_hash(session, "digest") is None
+
+    def test_claim_refuses_an_expired_row(self, test_db) -> None:
+        # 判过有效期之后、删除之前恰好过期：这一条必须自己把住
+        from app.repositories.users import PendingRegistrationRepository
+
+        repo = PendingRegistrationRepository()
+        with test_db.session() as session:
+            row = self._pending(session, expires_at=utcnow() - timedelta(seconds=1))
+            assert not repo.claim(
+                session, pending_id=row.id, token_hash="digest", now=utcnow()
+            )
+            assert repo.get_by_token_hash(session, "digest") is not None
+
+    def test_claim_refuses_a_mismatched_digest(self, test_db) -> None:
+        from app.repositories.users import PendingRegistrationRepository
+
+        repo = PendingRegistrationRepository()
+        with test_db.session() as session:
+            row = self._pending(session)
+            assert not repo.claim(
+                session, pending_id=row.id, token_hash="another", now=utcnow()
+            )
+
+    def test_claim_is_single_use(self, test_db) -> None:
+        """并发的第二次核销必须拿到 False，而不是删掉另一个人的占位。"""
+        from app.repositories.users import PendingRegistrationRepository
+
+        repo = PendingRegistrationRepository()
+        with test_db.session() as session:
+            row = self._pending(session, token_hash="once")
+            now = utcnow()
+            assert repo.claim(session, pending_id=row.id, token_hash="once", now=now)
+            assert not repo.claim(session, pending_id=row.id, token_hash="once", now=now)
+
+    def test_conflicting_cleanup_only_touches_expired_rows(self, test_db) -> None:
+        """请求时清理**只**该删过期的冲突行。
+
+        条件少一层就会变成 `A OR (B AND C)`，把"用户名冲突但仍在有效期内"的占位
+        也一起删掉 —— 那等于替别人撤销了预留。
+
+        两行**不能同名**（`username` 唯一），所以冲突只能来自另一列：新请求的
+        用户名撞上一条有效的，邮箱撞上一条过期的。
+        """
+        from app.repositories.users import PendingRegistrationRepository
+
+        repo = PendingRegistrationRepository()
+        with test_db.session() as session:
+            live = self._pending(
+                session,
+                username="alice",
+                email="live@example.com",
+                token_hash="live-digest",
+            )
+            expired = self._pending(
+                session,
+                username="bob",
+                email="reused@example.com",
+                token_hash="expired-digest",
+                expires_at=utcnow() - timedelta(seconds=1),
+            )
+
+            removed = repo.delete_expired_conflicting(
+                session,
+                username="alice",
+                email="reused@example.com",
+                now=utcnow(),
+            )
+
+            assert removed == 1
+            # 有效的那条必须留下 —— 它占的用户名还归它
+            assert repo.get_by_token_hash(session, live.token_hash) is not None
+            assert repo.get_by_token_hash(session, expired.token_hash) is None
+
+
 class TestEventRepository:
     def test_list_public_only_returns_requested_status(self, test_db, repos) -> None:
         _, _, event_repo, _ = repos

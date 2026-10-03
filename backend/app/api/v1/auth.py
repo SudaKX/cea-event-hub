@@ -27,9 +27,11 @@ from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
+    RegistrationPendingResponse,
     ResetPasswordRequest,
     TokenRequest,
     UserEnvelope,
+    VerifyRegistrationRequest,
 )
 from app.services.auth import AuthService
 
@@ -76,9 +78,9 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
 
 @router.post(
     "/register",
-    status_code=status.HTTP_201_CREATED,
-    response_model=UserEnvelope,
-    summary="开放注册",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=RegistrationPendingResponse,
+    summary="提交注册（两阶段的第一步）",
 )
 def register(
     payload: RegisterRequest,
@@ -86,19 +88,43 @@ def register(
     session: DbSession,
     limiter: RateLimiterDep,
     settings: RuntimeSettings,
-) -> UserEnvelope:
+    email_sender: EmailSenderDep,
+) -> RegistrationPendingResponse:
+    """建立待验证占位并发信。**账号此时并不存在。**
+
+    202 而不是 201：这一步只受理了请求，资源（账号）要到邮件链接被打开才创建。
+    """
     _guard_auth_rate(request, limiter, "register")
 
-    user = _service(settings).register(
+    ongoing = _service(settings).request_registration(
         session,
         username=payload.username,
+        email=payload.email,
         password=payload.password,
         display_name=payload.display_name,
-        email=payload.email,
-        invite_code=payload.invite_code,
+        email_sender=email_sender,
     )
-    # 刻意不自动登录：让"注册"与"获得会话"是两件明确的事
-    return UserEnvelope(user=UserPublic.from_model(user))
+    return RegistrationPendingResponse(ongoing=ongoing)
+
+
+@router.post(
+    "/register/verify",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="凭邮件链接完成注册（两阶段的第二步）",
+)
+def verify_registration(
+    payload: VerifyRegistrationRequest,
+    response: Response,
+    session: DbSession,
+    settings: RuntimeSettings,
+) -> Response:
+    """核销占位并建号。
+
+    **不自动登录** —— 与"注册"和"获得会话"是两件明确的事这一贯做法一致。
+    """
+    _service(settings).verify_registration(session, token=payload.token)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.post("/login", response_model=UserEnvelope, summary="登录")

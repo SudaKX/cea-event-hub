@@ -210,14 +210,14 @@ class TestRateLimitEnforcement:
         monkeypatch.setattr(global_settings, "RATE_LIMIT_AUTH_IP_MAX", 2)
 
         assert client.post(
-            f"{API}/auth/register", json={"username": "alice", "password": "correct-horse"}
-        ).status_code == 201
+            f"{API}/auth/register", json={"username": "alice", "password": "correct-horse", "email": "alice@example.com"}
+        ).status_code == 202
         assert client.post(
-            f"{API}/auth/register", json={"username": "bob", "password": "correct-horse"}
-        ).status_code == 201
+            f"{API}/auth/register", json={"username": "bob", "password": "correct-horse", "email": "bob@example.com"}
+        ).status_code == 202
 
         response = client.post(
-            f"{API}/auth/register", json={"username": "carol", "password": "correct-horse"}
+            f"{API}/auth/register", json={"username": "carol", "password": "correct-horse", "email": "carol@example.com"}
         )
         assert response.status_code == 429
 
@@ -246,8 +246,14 @@ class TestRateLimitEnforcement:
         )
         assert response.status_code == 429
 
-    def test_user_dimension_limits_across_ips(self, app, test_db, monkeypatch) -> None:
-        """只查来源维度的话，换一个出口就能绕过；用户维度补上这一半。"""
+    def test_user_dimension_limits_across_ips(
+        self, app, test_db, monkeypatch, register
+    ) -> None:
+        """只查来源维度的话，换一个出口就能绕过；用户维度补上这一半。
+
+        走完两阶段注册：这个用例要的是"已登录用户"，而注册不再是一次请求建号 ——
+        停在第一步的话后面那次登录会 401，提交就变成匿名的，用户维度根本没被覆盖。
+        """
         from fastapi.testclient import TestClient
 
         _seed_event(test_db)
@@ -255,11 +261,13 @@ class TestRateLimitEnforcement:
         monkeypatch.setattr(global_settings, "RATE_LIMIT_SUBMIT_USER_MAX", 2)
 
         with TestClient(app) as first:
-            first.post(
-                f"{API}/auth/register", json={"username": "alice", "password": "correct-horse"}
-            )
-            first.post(
-                f"{API}/auth/login", json={"username": "alice", "password": "correct-horse"}
+            assert register(first, username="alice").status_code == 204
+            assert (
+                first.post(
+                    f"{API}/auth/login",
+                    json={"username": "alice", "password": "correct-horse"},
+                ).status_code
+                == 200
             )
             assert first.post(
                 f"{API}/events/spring-2026/submissions", params={"client_id": "browser-rl"}, json={"n": 1}

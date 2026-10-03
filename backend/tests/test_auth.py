@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.clock import utcnow
 from app.core.config import settings as global_settings
@@ -20,15 +20,29 @@ from app.core.security import (
     needs_rehash,
     verify_password,
 )
-from app.db.models import User, UserSession
+from app.db.models import PendingRegistration, User, UserSession
+from tests.conftest import verification_token
 
 API = "/api/v1"
 
 
-def _register(client, username="alice", password="correct-horse", **extra):
+def _start_registration(client, username="alice", password="correct-horse", **extra):
+    """只发**第一步**（建立占位），返回 202 那个响应。
+
+    要造出真正的用户请用 `register` 夹具 —— 它把两步都走完。这里保留单步，是为了
+    让"第一步本身的行为"（校验、冲突、重入）能被直接观察。
+
+    默认邮箱由**归一化后**的用户名拼出来：拿原始值拼的话，`"  Alice  "` 会生出
+    `"  Alice  @example.com"` 这种非法地址，测试就会因为一个无关的理由失败。
+    """
     return client.post(
         f"{API}/auth/register",
-        json={"username": username, "password": password, **extra},
+        json={
+            "username": username,
+            "password": password,
+            "email": extra.pop("email", f"{username.strip().lower()}@example.com"),
+            **extra,
+        },
     )
 
 
@@ -39,8 +53,9 @@ def _login(client, username="alice", password="correct-horse"):
 
 
 @pytest.fixture
-def registered(client):
-    assert _register(client).status_code == 201
+def registered(client, register):
+    """一个已通过邮箱验证的真实账号。"""
+    assert register(client).status_code == 204
     return "alice"
 
 
@@ -109,106 +124,261 @@ class TestSecurityPrimitives:
 
 
 class TestRegistration:
-    """任务 4.2"""
+    """任务 4.2 与 16.2–16.3：两阶段注册。"""
 
-    def test_register_creates_plain_active_user(self, client, test_db) -> None:
-        response = _register(client)
-        assert response.status_code == 201
+    def test_request_creates_no_account(self, client, test_db) -> None:
+        """**这是两阶段的核心断言。**
 
-        body = response.json()["user"]
-        assert body["username"] == "alice"
-        assert body["role"] == UserRole.USER.value
-        assert body["email_verified"] is False
+        请求只建立占位。先建账号再验证邮箱会给每一个写错邮箱的注册留下一个永远
+        无法验证的账号 —— 它占着用户名、可能被用来登录、还得靠人工清理。
+        """
+        response = _start_registration(client)
+        assert response.status_code == 202
+        assert response.json()["ongoing"] is False
 
         with test_db.session() as session:
-            user = session.scalar(select(User).where(User.username == "alice"))
-        assert user is not None and user.is_active is True
+            assert session.scalar(select(User).where(User.username == "alice")) is None
+            assert session.scalar(select(PendingRegistration)) is not None
 
-    def test_response_never_contains_password_hash(self, client) -> None:
-        text = _register(client).text
-        assert "password" not in text
-        assert "argon2" not in text
+    def test_request_sends_a_verification_link(self, client, sent_emails) -> None:
+        _start_registration(client)
+        recipient, subject, body = sent_emails.sent[-1]
+        assert recipient == "alice@example.com"
+        assert "完成注册" in subject
+        assert "/verify-registration?token=" in body
 
-    def test_username_is_normalized_on_write(self, client, test_db) -> None:
-        assert _register(client, username="  Alice  ").status_code == 201
+    def test_password_is_never_stored_in_clear(self, client, test_db) -> None:
+        _start_registration(client, password="correct-horse")
         with test_db.session() as session:
-            # 存的是归一化值，唯一约束才在两库上行为一致
-            assert session.scalar(select(User).where(User.username == "alice"))
+            pending = session.scalar(select(PendingRegistration))
+        assert pending is not None
+        assert "correct-horse" not in pending.password_hash
+        assert pending.password_hash.startswith("$argon2")
+
+    def test_username_is_normalized_on_the_pending_row(self, client, test_db) -> None:
+        assert _start_registration(client, username="  Alice  ").status_code == 202
+        with test_db.session() as session:
+            assert session.scalar(
+                select(PendingRegistration).where(
+                    PendingRegistration.username == "alice"
+                )
+            )
 
     def test_username_uniqueness_is_case_insensitive(self, client) -> None:
-        assert _register(client, username="Alice").status_code == 201
+        assert _start_registration(client, username="Alice").status_code == 202
 
-        duplicate = _register(client, username="alice")
+        duplicate = _start_registration(client, username="alice", email="other@example.com")
         assert duplicate.status_code == 409
-        assert duplicate.json()["error"]["code"] == "username_taken"
+        assert duplicate.json()["error"]["code"] == "registration_pending"
+
+    def test_pending_conflict_is_distinct_from_taken(self, client, register) -> None:
+        """**两种冲突必须分得清。**
+
+        "已被注册"要用户换个名字或去登录；"有待验证的注册"要他去查收邮件。合并成
+        一句会把第二种情形里的人送去一个根本不存在账号的登录页。
+        """
+        assert register(client, username="bob", email="bob@example.com").status_code == 204
+
+        # 真实账号占用 → username_taken
+        taken = _start_registration(client, username="bob", email="b2@example.com")
+        assert taken.status_code == 409
+        assert taken.json()["error"]["code"] == "username_taken"
+
+        # 另一条占位占用 → registration_pending，且指出是哪个字段
+        _start_registration(client, username="carol", email="carol@example.com")
+        pending = _start_registration(client, username="carol", email="c2@example.com")
+        assert pending.status_code == 409
+        assert pending.json()["error"]["code"] == "registration_pending"
+        assert "username" in pending.json()["error"]["fields"]
+
+    def test_same_pair_is_a_reentry(self, client, sent_emails) -> None:
+        """同一对重入不新建、**不重发**。
+
+        重发会让用户收到两封一模一样的邮件，而其中的旧链接仍然有效 —— 那才是真正
+        让人困惑的地方。
+        """
+        assert _start_registration(client).status_code == 202
+        before = len(sent_emails.sent)
+
+        again = _start_registration(client)
+        assert again.status_code == 202
+        assert again.json()["ongoing"] is True
+        assert len(sent_emails.sent) == before
+
+    def test_expired_pending_frees_the_slot_on_the_next_request(
+        self, client, test_db
+    ) -> None:
+        """到期即刻释放 —— 不必等后台清理任务跑。
+
+        唯一索引**不认时间**：过期占位在被真正删除前会一直占着用户名与邮箱。
+        """
+        _start_registration(client)
+        with test_db.session() as session:
+            pending = session.scalar(select(PendingRegistration))
+            assert pending is not None
+            pending.expires_at = utcnow() - timedelta(seconds=1)
+
+        assert _start_registration(client).status_code == 202
 
     @pytest.mark.parametrize(
         "reserved", ["admin", "ADMIN", "root", "System", "administrator"]
     )
     def test_reserved_usernames_are_rejected(self, client, reserved: str) -> None:
         """保留名不可移除：引导账号名可预测，防线之一就是没人能抢注它。"""
-        response = _register(client, username=reserved)
+        response = _start_registration(client, username=reserved)
         assert response.status_code == 422
         assert "username" in response.json()["error"]["fields"]
 
-    def test_reserved_list_is_compared_after_normalization(
-        self, client, test_db
-    ) -> None:
-        assert _register(client, username="  AdMiN  ").status_code == 422
-        with test_db.session() as session:
-            assert session.scalar(select(User).where(User.username == "admin")) is None
-
     @pytest.mark.parametrize("bad", ["ab", "has space", "bad!char", "UPPER!"])
     def test_invalid_username_shapes_are_rejected(self, client, bad: str) -> None:
-        response = _register(client, username=bad)
+        response = _start_registration(client, username=bad)
         assert response.status_code == 422
         assert "username" in response.json()["error"]["fields"]
 
     def test_short_password_is_rejected(self, client) -> None:
-        response = _register(client, password="short")
+        response = _start_registration(client, password="short")
         assert response.status_code == 422
         assert "password" in response.json()["error"]["fields"]
 
     def test_invalid_email_shape_is_rejected(self, client) -> None:
-        response = _register(client, email="not-an-email")
+        response = _start_registration(client, email="not-an-email")
         assert response.status_code == 422
         assert "email" in response.json()["error"]["fields"]
 
+    def test_email_is_required(self, client) -> None:
+        # 没有"仅凭用户名注册"的降级路径：验证的对象就是邮箱
+        response = client.post(
+            f"{API}/auth/register",
+            json={"username": "alice", "password": "correct-horse"},
+        )
+        assert response.status_code == 422
+
     def test_email_uniqueness_is_case_insensitive(self, client) -> None:
-        assert _register(client, "alice", email="A@Example.com").status_code == 201
-        response = _register(client, "bob", email="a@example.com")
+        assert _start_registration(client, "alice", email="A@Example.com").status_code == 202
+        response = _start_registration(client, "bob", email="a@example.com")
         assert response.status_code == 409
-        assert response.json()["error"]["code"] == "email_taken"
+        assert response.json()["error"]["code"] == "registration_pending"
 
-    def test_register_does_not_issue_a_session(self, client) -> None:
-        # "注册"与"获得会话"是两件明确的事
-        assert _register(client).status_code == 201
-        assert client.get(f"{API}/auth/me").status_code == 401
 
-    def test_display_name_defaults_to_username(self, client, test_db) -> None:
-        _register(client)
+class TestRegistrationVerification:
+    """任务 16.3：核销。"""
+
+    def test_verify_creates_the_account(self, client, test_db, sent_emails) -> None:
+        _start_registration(client)
+
+        response = client.post(
+            f"{API}/auth/register/verify",
+            json={"token": verification_token(sent_emails, "alice@example.com")},
+        )
+        assert response.status_code == 204
+
         with test_db.session() as session:
             user = session.scalar(select(User).where(User.username == "alice"))
-        assert user is not None and user.display_name == "alice"
+            # 占位被消费掉了
+            assert session.scalar(select(PendingRegistration)) is None
+        assert user is not None
+        assert user.role == UserRole.USER.value
+        assert user.is_active is True
+        # 邮箱刚刚被证明是可达的 —— 这正是本流程的产出
+        assert user.email_verified_at is not None
+        assert user.email == "alice@example.com"
 
+    def test_the_new_account_can_log_in_with_the_pending_password(
+        self, client, sent_emails
+    ) -> None:
+        _start_registration(client, password="correct-horse")
+        client.post(
+            f"{API}/auth/register/verify",
+            json={"token": verification_token(sent_emails, "alice@example.com")},
+        )
+        assert _login(client).status_code == 200
 
-class TestInviteCode:
-    def test_disabled_by_default(self, client) -> None:
-        assert _register(client).status_code == 201
+    def test_link_is_single_use(self, client, sent_emails, test_db) -> None:
+        _start_registration(client)
+        token = verification_token(sent_emails, "alice@example.com")
 
-    def test_wrong_code_is_rejected(self, client, monkeypatch) -> None:
-        monkeypatch.setattr(global_settings, "REGISTRATION_INVITE_CODE", "let-me-in")
-        response = _register(client, invite_code="nope")
-        assert response.status_code == 422
-        assert "invite_code" in response.json()["error"]["fields"]
+        assert client.post(
+            f"{API}/auth/register/verify", json={"token": token}
+        ).status_code == 204
+        assert client.post(
+            f"{API}/auth/register/verify", json={"token": token}
+        ).status_code == 400
 
-    def test_missing_code_is_rejected_when_enabled(self, client, monkeypatch) -> None:
-        monkeypatch.setattr(global_settings, "REGISTRATION_INVITE_CODE", "let-me-in")
-        assert _register(client).status_code == 422
+        with test_db.session() as session:
+            count = session.scalar(select(func.count()).select_from(User))
+        assert count == 1
 
-    def test_correct_code_is_accepted(self, client, monkeypatch) -> None:
-        monkeypatch.setattr(global_settings, "REGISTRATION_INVITE_CODE", "let-me-in")
-        assert _register(client, invite_code="let-me-in").status_code == 201
+    def test_expired_link_is_rejected(self, client, sent_emails, test_db) -> None:
+        _start_registration(client)
+        with test_db.session() as session:
+            pending = session.scalar(select(PendingRegistration))
+            assert pending is not None
+            pending.expires_at = utcnow() - timedelta(seconds=1)
+
+        response = client.post(
+            f"{API}/auth/register/verify",
+            json={"token": verification_token(sent_emails, "alice@example.com")},
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "token_invalid"
+
+    def test_unknown_token_is_rejected(self, client) -> None:
+        response = client.post(
+            f"{API}/auth/register/verify", json={"token": generate_token()}
+        )
+        # 与"过期"同一个错误：不把"这个凭据存在但过期了"泄露出去
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "token_invalid"
+
+    def test_verify_does_not_issue_a_session(self, client, sent_emails) -> None:
+        # "注册"与"获得会话"是两件明确的事
+        _start_registration(client)
+        client.post(
+            f"{API}/auth/register/verify",
+            json={"token": verification_token(sent_emails, "alice@example.com")},
+        )
+        assert client.get(f"{API}/auth/me").status_code == 401
+
+    def test_conflict_leaves_the_pending_row_intact(
+        self, client, sent_emails, test_db
+    ) -> None:
+        """核销时撞上真人抢注，**占位必须还在**。
+
+        核销与建号同事务，失败即整体回滚。否则用户会既没建成账号、又丢了凭据 ——
+        连重试的机会都没有。
+
+        抢注只能**直接插一行**来模拟：走接口的话，占位已经锁住了那个用户名，
+        第二次注册会在第一步就被挡下 —— 那正是"冲突在提交那一刻就暴露"的意思。
+        """
+        _start_registration(client, username="alice")
+        token = verification_token(sent_emails, "alice@example.com")
+
+        with test_db.session() as session:
+            session.add(
+                User(
+                    username="alice",
+                    display_name="抢注者",
+                    password_hash=hash_password("another-pass"),
+                    email="other@example.com",
+                    role=UserRole.USER.value,
+                )
+            )
+
+        response = client.post(f"{API}/auth/register/verify", json={"token": token})
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "registration_conflict"
+
+        with test_db.session() as session:
+            assert session.scalar(select(PendingRegistration)) is not None
+
+    def test_verification_token_is_not_stored_in_clear(
+        self, client, sent_emails, test_db
+    ) -> None:
+        _start_registration(client)
+        token = verification_token(sent_emails, "alice@example.com")
+        with test_db.session() as session:
+            pending = session.scalar(select(PendingRegistration))
+        assert pending is not None and pending.token_hash != token
 
 
 class TestLoginAndSession:

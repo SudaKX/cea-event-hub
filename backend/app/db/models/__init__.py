@@ -8,10 +8,16 @@ from __future__ import annotations
 
 from app.db.models.event import Event
 from app.db.models.submission import Submission, SubmissionFile, SubmitterQuota
-from app.db.models.user import User, UserSession, UserToken
+from app.db.models.user import (
+    PendingRegistration,
+    User,
+    UserSession,
+    UserToken,
+)
 
 __all__ = [
     "Event",
+    "PendingRegistration",
     "Submission",
     "SubmissionFile",
     "SubmitterQuota",

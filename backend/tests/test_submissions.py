@@ -14,6 +14,7 @@ from app.core.enums import EventStatus, StorageState, SubmissionStatus
 from app.core.security import hash_ip
 from app.db.models import (
     Event,
+    PendingRegistration,
     Submission,
     SubmissionFile,
     SubmitterQuota,
@@ -840,6 +841,46 @@ class TestJanitor:
             settings=app.state.settings,
             storage=storage,
             limiter=limiter if limiter is not None else app.state.rate_limiter,
+        )
+
+    def test_removes_expired_registration_pendings(
+        self, app, test_db, storage, client
+    ) -> None:
+        """过期占位要被**真正删掉**，用户名与邮箱才能重新可用。
+
+        唯一性由唯一索引保证，而索引不认时间：只标记不过期的做法会让那个槽位一直
+        被占着。注册请求时也会清一次与之冲突的过期行（到期即刻释放），这里是
+        没人注册时的兜底。
+        """
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "alice",
+                "password": "correct-horse",
+                "email": "alice@example.com",
+            },
+        )
+        with test_db.session() as session:
+            pending = session.scalar(select(PendingRegistration))
+            assert pending is not None
+            pending.expires_at = utcnow() - timedelta(seconds=1)
+
+        report = self._janitor(app, test_db, storage).run_once()
+        assert report.pending_registrations_removed == 1
+
+        with test_db.session() as session:
+            assert session.scalar(select(PendingRegistration)) is None
+        # 槽位释放了：同样的用户名与邮箱可以重新注册
+        assert (
+            client.post(
+                "/api/v1/auth/register",
+                json={
+                    "username": "alice",
+                    "password": "correct-horse",
+                    "email": "alice@example.com",
+                },
+            ).status_code
+            == 202
         )
 
     def test_removes_orphan_bytes(

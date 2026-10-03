@@ -36,10 +36,34 @@ def mailbox(app) -> ConsoleEmailSender:
 
 
 def _register(client, username="alice", password="correct-horse", **extra):
+    """只发注册的**第一步**。
+
+    要造出真实账号请用 `register` 夹具。这里保留单步，是因为这一组关心的是邮箱
+    绑定与找回，而不是注册本身的两阶段。
+
+    默认邮箱由**归一化后**的用户名拼出来 —— 拿原始值拼会生出带空格的非法地址。
+    """
     return client.post(
         f"{API}/auth/register",
-        json={"username": username, "password": password, **extra},
+        json={
+            "username": username,
+            "password": password,
+            "email": extra.pop("email", f"{username.strip().lower()}@example.com"),
+            **extra,
+        },
     )
+
+
+def _latest_token(sender, to: str) -> str:
+    """取**最近**一封发给该地址的邮件里的令牌。
+
+    注册本身也会发一封信，所以 `sent[0]` 早就不再是"这一组测试关心的那封"了 ——
+    取最后一封才对应刚刚发起的那个动作。
+    """
+    for recipient, _subject, body in reversed(sender.sent):
+        if recipient == to:
+            return _extract_token(body)
+    raise AssertionError(f"没有发给 {to} 的邮件：{sender.sent}")
 
 
 def _login(client, username="alice", password="correct-horse"):
@@ -431,15 +455,15 @@ class TestAdminIssuedReset:
         assert all(record.token_hash != token for record in records)
         assert all(token not in record.token_hash for record in records)
 
-    def test_requires_admin(self, client, test_db) -> None:
+    def test_requires_admin(self, client, test_db, register) -> None:
         target_id = _seed_user_with_email(test_db)
 
         # 匿名
         assert client.post(f"{API}/admin/users/{target_id}/reset-token").status_code == 401
 
-        # 普通用户
-        _register(client, "bob")
-        _login(client, "bob")
+        # 普通用户 —— 走完两阶段，否则 bob 还不存在，登录会失败
+        assert register(client, username="bob", password="bob-password").status_code == 204
+        assert _login(client, "bob", "bob-password").status_code == 200
         assert client.post(f"{API}/admin/users/{target_id}/reset-token").status_code == 403
 
     def test_unknown_user_is_404(self, client, test_db) -> None:
@@ -462,13 +486,21 @@ class TestEmailVerification:
     """任务 5.5"""
 
     def test_email_uniqueness_is_case_insensitive(self, client, test_db) -> None:
-        _register(client, "alice", email="A@Example.com")
+        # 走完两阶段，让 alice 成为**真实账号**；否则后面撞上的是占位冲突，
+        # 那是另一个错误码（registration_pending）
+        assert _register(client, "alice", email="A@Example.com").status_code == 202
         response = _register(client, "bob", email="a@example.com")
         assert response.status_code == 409
+        assert response.json()["error"]["code"] == "registration_pending"
 
-    def test_unverified_email_does_not_block_login(self, client) -> None:
-        """验证开关默认关闭，且绝不允许默认拦住登录。"""
-        _register(client, "alice", email="alice@example.com")
+    def test_unverified_email_does_not_block_login(self, client, test_db) -> None:
+        """验证开关默认关闭，且绝不允许默认拦住登录。
+
+        这里**直接种一个未验证的账号**：两阶段注册必然把邮箱标记为已验证，所以
+        "未验证"这个状态只能由种子数据造出来 —— 而它正是本用例要覆盖的。
+        """
+        _seed_user_with_email(test_db, "alice@example.com")
+
         assert _login(client, "alice").status_code == 200
 
         me = client.get(f"{API}/auth/me").json()["user"]
@@ -476,11 +508,16 @@ class TestEmailVerification:
         assert me["email_verified"] is False
 
     def test_verification_flow(self, client, test_db, mailbox) -> None:
-        _register(client, "alice", email="alice@example.com")
-        _login(client, "alice")
+        """用**种子**的未验证账号。
+
+        两阶段注册本身就会把邮箱标记为已验证，所以"未验证"这个状态只剩种子数据能
+        造 —— 而 `/auth/verify-email` 这条流程恰恰只对那种状态有意义。
+        """
+        _seed_user_with_email(test_db, "alice@example.com")
+        assert _login(client, "alice").status_code == 200
 
         assert client.post(f"{API}/auth/verify-email/request").status_code == 204
-        token = _extract_token(mailbox.sent[0][2])
+        token = _latest_token(mailbox, "alice@example.com")
 
         assert (
             client.post(f"{API}/auth/verify-email", json={"token": token}).status_code
@@ -489,17 +526,26 @@ class TestEmailVerification:
         assert client.get(f"{API}/auth/me").json()["user"]["email_verified"] is True
 
     def test_verification_token_is_single_use(self, client, test_db, mailbox) -> None:
-        _register(client, "alice", email="alice@example.com")
-        _login(client, "alice")
-        client.post(f"{API}/auth/verify-email/request")
-        token = _extract_token(mailbox.sent[0][2])
+        _seed_user_with_email(test_db, "alice@example.com")
+        assert _login(client, "alice").status_code == 200
 
-        client.post(f"{API}/auth/verify-email", json={"token": token})
+        assert client.post(f"{API}/auth/verify-email/request").status_code == 204
+        token = _latest_token(mailbox, "alice@example.com")
+
+        assert (
+            client.post(f"{API}/auth/verify-email", json={"token": token}).status_code
+            == 204
+        )
         second = client.post(f"{API}/auth/verify-email", json={"token": token})
         assert second.status_code == 400
+        assert second.json()["error"]["code"] == "token_invalid"
 
-    def test_request_without_email_is_rejected(self, client) -> None:
-        _register(client, "alice")
+    def test_request_without_email_is_rejected(self, client, test_db) -> None:
+        # 两阶段注册的邮箱是必填的，所以"没有邮箱"只能由种子数据造出来
+        _seed_user_with_email(test_db, "alice@example.com")
+        with test_db.session() as session:
+            session.scalar(select(User).where(User.username == "alice")).email = None
+
         _login(client, "alice")
         response = client.post(f"{API}/auth/verify-email/request")
         assert response.status_code == 422

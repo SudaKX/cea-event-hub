@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
+from app.core.ports import NullEmailSender
 from app.db.session import Database
 from app.main import create_app
 
@@ -88,7 +90,66 @@ def app(test_db: Database, monkeypatch: pytest.MonkeyPatch, content_root):
 
     application = create_app()
     application.state.database = test_db
+    # 换成可捕获的发信实现：注册现在是两阶段的，测试必须能从邮件里取出验证 token。
+    # 顺带把 console 实现往 stdout 打印的邮件正文挡在测试输出之外。
+    application.state.email_sender = NullEmailSender()
     return application
+
+
+@pytest.fixture
+def sent_emails(app) -> NullEmailSender:
+    """本次测试发出的邮件。`sent` 里是 (收件人, 主题, 正文)。"""
+    return app.state.email_sender
+
+
+def verification_token(sender: NullEmailSender, to: str) -> str:
+    """从最近一封发给该地址的邮件里取出验证 token。
+
+    正则从正文里捞 —— 链接的形状由服务层拼装，这里只认 `token=` 那一段。
+    """
+    for recipient, _subject, body in reversed(sender.sent):
+        if recipient != to:
+            continue
+        match = re.search(r"[?&]token=([A-Za-z0-9_\-]+)", body)
+        assert match, f"邮件里没有验证链接：{body}"
+        return match.group(1)
+    raise AssertionError(f"没有发给 {to} 的邮件：{sender.sent}")
+
+
+@pytest.fixture
+def register(client, sent_emails):
+    """走完两阶段注册，返回**最后一步**（核销）的响应。
+
+    注册不再是"一次请求建号"，因此凡是要造出一个真实用户的测试都得走两步。把它
+    收成一个夹具，改动就集中在这里，而不是散落到每个用例里。
+    """
+
+    def _register(
+        target_client,
+        *,
+        username: str = "alice",
+        password: str = "correct-horse",
+        email: str | None = None,
+        **extra: object,
+    ):
+        address = email or f"{username.strip().lower()}@example.com"
+        started = target_client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": username,
+                "password": password,
+                "email": address,
+                **extra,
+            },
+        )
+        if started.status_code != 202:
+            return started
+        return target_client.post(
+            "/api/v1/auth/register/verify",
+            json={"token": verification_token(sent_emails, address)},
+        )
+
+    return _register
 
 
 @pytest.fixture
@@ -138,14 +199,14 @@ def admin_client(app, admin_id: int):
 
 
 @pytest.fixture
-def user_client(app, test_db: Database):
-    """已登录普通用户的客户端（独立实例，见 admin_client 的说明）。"""
+def user_client(app, test_db: Database, register):
+    """已登录普通用户的客户端（独立实例，见 admin_client 的说明）。
+
+    走完整的两阶段注册 —— 注册不再是一次请求建号。
+    """
     with TestClient(app) as test_client:
-        response = test_client.post(
-            "/api/v1/auth/register",
-            json={"username": "alice", "password": "correct-horse"},
-        )
-        assert response.status_code == 201, response.text
+        response = register(test_client, username="alice")
+        assert response.status_code == 204, response.text
         assert (
             test_client.post(
                 "/api/v1/auth/login",

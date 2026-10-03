@@ -147,6 +147,42 @@ class EmailTaken(DomainError):
     message = "该邮箱已被绑定"
 
 
+class RegistrationPending(DomainError):
+    """该用户名或邮箱已被一条**待验证的注册**占着。
+
+    与 `UsernameTaken` / `EmailTaken` 分成**不同的码**，因为二者指向完全不同的
+    下一步：
+
+    - "已被注册"：换个名字，或者去登录 / 找回口令
+    - "有待验证的注册"：去查收邮件，或者等它过期
+
+    合并成一句会把第二种情形里的用户送去一个**根本不存在账号**的登录页 —— 他会
+    在那里反复试错，而正确动作其实在邮箱里。
+
+    以 `fields` 指出是哪一个字段冲突：前端据此把提示落到具体输入框上。
+    """
+
+    code = "registration_pending"
+    status_code = 409
+    message = "该用户名或邮箱有一条待验证的注册"
+
+
+class RegistrationConflict(DomainError):
+    """核销时发现用户名或邮箱已被真实账号占用。
+
+    这只可能发生在占位存续期间有人注册了同一个名字。占位会被**保留**（核销与建号
+    同事务，失败即整体回滚），因此链接在有效期内仍可重试 —— 否则用户会既没建成
+    账号又丢了凭据。
+
+    与 `UsernameTaken` 分开，是因为它描述的不是"这次提交有问题"，而是"验证期间
+    情况变了"，前端该给的提示也不同。
+    """
+
+    code = "registration_conflict"
+    status_code = 409
+    message = "该用户名或邮箱已被占用，无法完成注册"
+
+
 class QuotaExhausted(DomainError):
     """活动提交条数达到上限。
 
@@ -225,6 +261,8 @@ __all__ = [
     "InternalError",
     "InvalidCredentials",
     "LastAdminProtected",
+    "RegistrationConflict",
+    "RegistrationPending",
     "LoginRequired",
     "NotFound",
     "PayloadTooLarge",

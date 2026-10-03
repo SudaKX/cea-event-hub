@@ -31,7 +31,11 @@ from app.core.ports import FileStorage, RateLimiter
 from app.db.models import Submission
 from app.db.session import Database
 from app.repositories.submissions import SubmissionFileRepository
-from app.repositories.users import SessionRepository, UserTokenRepository
+from app.repositories.users import (
+    PendingRegistrationRepository,
+    SessionRepository,
+    UserTokenRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,7 @@ class JanitorReport:
     pending_files_resolved: int = 0
     sessions_removed: int = 0
     tokens_removed: int = 0
+    pending_registrations_removed: int = 0
     rate_limit_keys_swept: int = 0
 
     @property
@@ -51,6 +56,7 @@ class JanitorReport:
             + self.pending_files_resolved
             + self.sessions_removed
             + self.tokens_removed
+            + self.pending_registrations_removed
         )
 
 
@@ -70,6 +76,7 @@ class Janitor:
         self.files = SubmissionFileRepository()
         self.sessions = SessionRepository()
         self.tokens = UserTokenRepository()
+        self.pending = PendingRegistrationRepository()
 
     def run_once(self) -> JanitorReport:
         report = JanitorReport()
@@ -80,6 +87,12 @@ class Janitor:
             report.pending_files_resolved = self._resolve_pending(session, cutoff)
             report.sessions_removed = self.sessions.delete_expired(session, now=now)
             report.tokens_removed = self.tokens.delete_expired(session, now=now)
+            # 过期占位必须**真正删掉**才能释放它占着的用户名与邮箱：唯一性由唯一
+            # 索引保证，而索引不认时间。注册请求时也会清一次与之冲突的过期行
+            # （到期即刻释放），这里是没人注册时的兜底
+            report.pending_registrations_removed = self.pending.delete_expired(
+                session, now=now
+            )
             known = self.files.known_paths(session)
 
         # 磁盘扫描放在事务之外：它只读文件系统，不该占着数据库连接
@@ -96,11 +109,12 @@ class Janitor:
 
         if report.total:
             logger.info(
-                "清理任务：孤儿文件 %d，待完成记录 %d，过期会话 %d，过期令牌 %d",
+                "清理任务：孤儿文件 %d，待完成记录 %d，过期会话 %d，过期令牌 %d，过期注册占位 %d",
                 report.orphan_files_removed,
                 report.pending_files_resolved,
                 report.sessions_removed,
                 report.tokens_removed,
+                report.pending_registrations_removed,
             )
         return report
 

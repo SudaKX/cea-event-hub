@@ -199,18 +199,22 @@ class TestAttachmentDownload:
         response = admin_client.get(f"{API}/submissions/{submission_id}/files/{file_id}")
         assert response.status_code == 200
 
-    def test_other_user_gets_404_not_403(self, user_client, anon_client, test_db) -> None:
+    def test_other_user_gets_404_not_403(
+        self, user_client, anon_client, test_db, register
+    ) -> None:
         """403 会确认"这个附件存在但不给你看"。"""
         _seed_event(test_db)
         submission_id, file_id = self._one_upload(user_client)
 
-        anon_client.post(
-            f"{API}/auth/register",
-            json={"username": "bob", "password": "correct-horse"},
-        )
-        anon_client.post(
-            f"{API}/auth/login",
-            json={"username": "bob", "password": "correct-horse"},
+        # 走完两阶段：停在第一步的话 bob 还不存在，后面那次请求就是匿名而非
+        # "另一个普通用户"，测的就不是这条规则了
+        assert register(anon_client, username="bob").status_code == 204
+        assert (
+            anon_client.post(
+                f"{API}/auth/login",
+                json={"username": "bob", "password": "correct-horse"},
+            ).status_code
+            == 200
         )
 
         response = anon_client.get(f"{API}/submissions/{submission_id}/files/{file_id}")

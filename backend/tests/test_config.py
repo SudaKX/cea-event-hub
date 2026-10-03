@@ -34,7 +34,6 @@ class TestDefaults:
         s = make_settings()
         assert s.REQUIRE_EMAIL_VERIFICATION is False
         assert s.ALLOW_SELF_SERVICE_RESET is False
-        assert s.REGISTRATION_INVITE_CODE == ""
         assert s.EMAIL_BACKEND == "console"
 
     def test_admin_bootstrap_defaults(self, make_settings) -> None:
@@ -69,7 +68,6 @@ class TestEnvOverride:
         monkeypatch.setenv("MAX_SUBMISSIONS_PER_EVENT_ANON", "128")
         monkeypatch.setenv("ADMIN_USERNAME", "chief")
         monkeypatch.setenv("ADMIN_INITIAL_PASSWORD", "s3cret-from-env")
-        monkeypatch.setenv("REGISTRATION_INVITE_CODE", "let-me-in")
         monkeypatch.setenv("REQUIRE_EMAIL_VERIFICATION", "true")
         monkeypatch.setenv("ALLOW_SELF_SERVICE_RESET", "true")
         monkeypatch.setenv("EMAIL_BACKEND", "smtp")
@@ -81,7 +79,6 @@ class TestEnvOverride:
         assert s.MAX_SUBMISSIONS_PER_EVENT_ANON == 128
         assert s.ADMIN_USERNAME == "chief"
         assert s.ADMIN_INITIAL_PASSWORD == "s3cret-from-env"
-        assert s.REGISTRATION_INVITE_CODE == "let-me-in"
         assert s.REQUIRE_EMAIL_VERIFICATION is True
         assert s.ALLOW_SELF_SERVICE_RESET is True
         assert s.EMAIL_BACKEND == "smtp"

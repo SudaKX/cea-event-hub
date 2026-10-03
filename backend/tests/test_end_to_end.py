@@ -240,16 +240,18 @@ class TestPrivacyEndToEnd:
             assert response.status_code == 404, path
 
     def test_other_users_cannot_read_the_attachment(
-        self, user_client, anon_client, test_db
+        self, user_client, anon_client, test_db, register
     ) -> None:
         submission_id, file_id = self._upload(user_client, test_db)
 
-        # 换一个普通用户
-        anon_client.post(
-            f"{API}/auth/register", json={"username": "bob", "password": "correct-horse"}
-        )
-        anon_client.post(
-            f"{API}/auth/login", json={"username": "bob", "password": "correct-horse"}
+        # 换一个普通用户（走完两阶段，否则 bob 还不存在、登录会失败）
+        assert register(anon_client, username="bob").status_code == 204
+        assert (
+            anon_client.post(
+                f"{API}/auth/login",
+                json={"username": "bob", "password": "correct-horse"},
+            ).status_code
+            == 200
         )
 
         response = anon_client.get(f"{API}/submissions/{submission_id}/files/{file_id}")
@@ -384,11 +386,9 @@ class TestFullAdminFlow:
         assert event is not None
         assert event.submission_count == rows == 1
 
-    def test_user_lifecycle(self, admin_client, anon_client, test_db) -> None:
-        # 注册 -> 登录 -> 提权 -> 降权 -> 停用
-        anon_client.post(
-            f"{API}/auth/register", json={"username": "alice", "password": "correct-horse"}
-        )
+    def test_user_lifecycle(self, admin_client, anon_client, test_db, register) -> None:
+        # 注册（两阶段）-> 登录 -> 提权 -> 降权 -> 停用
+        assert register(anon_client, username="alice").status_code == 204
         assert (
             anon_client.post(
                 f"{API}/auth/login",

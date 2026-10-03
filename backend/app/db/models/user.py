@@ -104,3 +104,42 @@ class UserToken(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<UserToken user_id={self.user_id} purpose={self.purpose}>"
+
+
+class PendingRegistration(Base):
+    """待验证的注册占位。
+
+    注册分两阶段：请求只建这一行，账号在邮箱验证成功后才出现。这样邮箱写错不会
+    留下一个永远无法验证的账号 —— 它占着用户名、可能被用来登录、还得靠人工清理；
+    两阶段把一个笔误变成"什么都没发生"（design.md 决策 19）。
+
+    **没有外键指向 `users`**，因为这一行存在的整个前提就是那个用户还不存在。
+
+    `username` 与 `email` 各自唯一，因此占位存续期间二者都被保留。注意**唯一索引
+    不认时间**：过期的行在被真正删除之前会一直占着这两个槽位，所以清理不是卫生
+    工作而是这套机制的一部分（见 16.4 的两处清理）。
+    """
+
+    __tablename__ = "pending_registrations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # 与 users 同一套归一化：`Alice` 与 `alice` 必须争同一个槽位，否则最后建号时
+    # 才会撞上唯一约束
+    username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+
+    # 口令在占位期间就以加盐慢哈希存下；明文绝不落库
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # 验证链接的凭据摘要。明文只出现在邮件里
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<PendingRegistration username={self.username!r}>"

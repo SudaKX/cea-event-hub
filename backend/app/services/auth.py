@@ -22,6 +22,8 @@ from app.core.exceptions import (
     Forbidden,
     InvalidCredentials,
     NotFound,
+    RegistrationConflict,
+    RegistrationPending,
     TokenInvalid,
     UsernameTaken,
     ValidationFailed,
@@ -44,8 +46,12 @@ from app.core.text import (
     truncate,
     username_shape_error,
 )
-from app.db.models import User, UserSession
-from app.repositories.users import SessionRepository, UserRepository
+from app.db.models import PendingRegistration, User, UserSession
+from app.repositories.users import (
+    PendingRegistrationRepository,
+    SessionRepository,
+    UserRepository,
+)
 from app.services.tokens import UserTokenService
 
 logger = logging.getLogger(__name__)
@@ -58,79 +64,186 @@ class AuthService:
         user_repo: UserRepository | None = None,
         session_repo: SessionRepository | None = None,
         token_service: UserTokenService | None = None,
+        pending_repo: PendingRegistrationRepository | None = None,
     ) -> None:
         self.settings = settings
         self.users = user_repo or UserRepository()
         self.sessions = session_repo or SessionRepository()
         self.tokens = token_service or UserTokenService(settings)
+        self.pending = pending_repo or PendingRegistrationRepository()
 
     # ------------------------------------------------------------------
-    # 注册
+    # 注册（两阶段：占位 -> 核销建号）
+    #
+    # 不做"先建账号、再验证邮箱"：那样每一个写错邮箱的注册都会留下一个永远无法
+    # 验证的账号 —— 它占着用户名、可能被用来登录、还得靠人工清理。两阶段把一个
+    # 笔误变成"什么都没发生"（design.md 决策 19）。
     # ------------------------------------------------------------------
 
-    def register(
+    def request_registration(
         self,
         session: Session,
         *,
         username: str,
+        email: str,
         password: str,
         display_name: str | None = None,
-        email: str | None = None,
-        invite_code: str | None = None,
-    ) -> User:
+        email_sender: EmailSender,
+    ) -> bool:
+        """建立待验证占位并发信。返回是否为**重入**（同一对已存在）。
+
+        重入时不新建、不重发：用户可能是刷新了页面或重按了提交，再发一封只会让
+        他收到两封一模一样的邮件，而其中的旧链接仍然有效 —— 那才是真正让人困惑
+        的地方。
+        """
         normalized = normalize_username(username)
+        normalized_email = normalize_email(email)
 
         fields: dict[str, str] = {}
         if (problem := username_shape_error(normalized)) is not None:
             fields["username"] = problem
         if (problem := password_shape_error(password)) is not None:
             fields["password"] = problem
-
-        normalized_email: str | None = None
-        if email:
-            normalized_email = normalize_email(email)
-            if (problem := email_shape_error(normalized_email)) is not None:
-                fields["email"] = problem
-
+        if (problem := email_shape_error(normalized_email)) is not None:
+            fields["email"] = problem
         if fields:
             raise ValidationFailed(fields=fields)
-
-        self._check_invite_code(invite_code)
 
         if normalized in self.settings.RESERVED_USERNAMES:
             # 保留名清单挡住两件事：抢占 admin 使平台失去管理入口，
             # 以及出现同名普通账号造成"谁是管理员"的混淆
             raise ValidationFailed(fields={"username": "该用户名为系统保留，请换一个"})
 
+        if (
+            self.pending.find_pair(
+                session, username=normalized, email=normalized_email
+            )
+            is not None
+        ):
+            return True
+
+        # 先看真实账号：它给出的下一步与"有人正在验证"完全不同
         if self.users.get_by_username(session, normalized) is not None:
             raise UsernameTaken()
-        if normalized_email and self.users.get_by_email(session, normalized_email):
+        if self.users.get_by_email(session, normalized_email) is not None:
             raise EmailTaken()
 
-        user = User(
+        # 到期即释放：唯一索引不认时间，过期的占位在被真正删除前会一直占着槽位。
+        # 只靠后台任务的话，用户得等它跑完才能重试。
+        now = utcnow()
+        self.pending.delete_expired_conflicting(
+            session, username=normalized, email=normalized_email, now=now
+        )
+
+        self._raise_if_pending(session, normalized, normalized_email)
+
+        token = generate_token()
+        pending = PendingRegistration(
             username=normalized,
-            display_name=truncate(display_name or normalized, 64),
-            password_hash=hash_password(password),
             email=normalized_email,
+            password_hash=hash_password(password),
+            display_name=truncate(display_name or normalized, 64),
+            token_hash=hash_token(token),
+            expires_at=now
+            + timedelta(seconds=self.settings.PENDING_REGISTRATION_TTL_SECONDS),
+        )
+        try:
+            self.pending.add(session, pending)
+        except IntegrityError as exc:
+            # 上面的检查与唯一索引之间仍有窗口；索引才是权威。
+            # 能走到这里说明另一边是**并发创建出来的占位**（真实账号已查过）
+            session.rollback()
+            raise RegistrationPending() from exc
+
+        self._send_registration_email(
+            email_sender,
+            to=normalized_email,
+            display_name=pending.display_name,
+            token=token,
+        )
+        return False
+
+    def _raise_if_pending(
+        self, session: Session, username: str, email: str
+    ) -> None:
+        """按字段报出"有待验证的注册"。
+
+        唯一的那个索引只会抛一个不带字段信息的完整性错误，而提示必须落在具体的
+        输入框上，所以这里显式查一次。
+        """
+        if self.pending.get_by_username(session, username) is not None:
+            raise RegistrationPending(fields={"username": "该用户名有一条待验证的注册"})
+        if self.pending.get_by_email(session, email) is not None:
+            raise RegistrationPending(fields={"email": "该邮箱有一条待验证的注册"})
+
+    def verify_registration(self, session: Session, *, token: str) -> User:
+        """核销占位并建号。**不建立会话** —— 与既有"注册与获得会话是两件事"一致。"""
+        digest = hash_token(token)
+        pending = self.pending.get_by_token_hash(session, digest)
+
+        # 三种失败（不存在 / 已过期 / 已被别人核销）统一返回同一个错误，
+        # 不把"这个凭据存在但过期了"泄露出去
+        if pending is None or pending.expires_at <= utcnow():
+            raise TokenInvalid()
+
+        # 先把值取出来：下面那条 DELETE 之后，这一行在库里就不存在了
+        snapshot = (
+            pending.id,
+            pending.username,
+            pending.email,
+            pending.password_hash,
+            pending.display_name,
+        )
+
+        if not self.pending.claim(
+            session, pending_id=snapshot[0], token_hash=digest, now=utcnow()
+        ):
+            # 并发的另一个请求先核销了
+            raise TokenInvalid()
+
+        _, username, email, password_hash, display_name = snapshot
+        user = User(
+            username=username,
+            display_name=display_name,
+            password_hash=password_hash,
+            email=email,
+            # 邮箱刚刚被证明是可达的 —— 这正是本流程的产出
+            email_verified_at=utcnow(),
             role=UserRole.USER.value,
             is_active=True,
         )
         try:
             self.users.add(session, user)
         except IntegrityError as exc:
-            # 上面的查重与这里的唯一约束之间仍有窗口；约束才是权威
+            # 占位存续期间有人注册了同名账号。整体回滚 → **占位仍在**，
+            # 用户不至于既没建成账号又丢了凭据
             session.rollback()
-            raise UsernameTaken() from exc
+            raise RegistrationConflict() from exc
         return user
 
-    def _check_invite_code(self, provided: str | None) -> None:
-        expected = (self.settings.REGISTRATION_INVITE_CODE or "").strip()
-        if not expected:
-            return
-        import hmac
-
-        if not provided or not hmac.compare_digest(provided.strip(), expected):
-            raise ValidationFailed(fields={"invite_code": "邀请码不正确"})
+    def _send_registration_email(
+        self,
+        email_sender: EmailSender,
+        *,
+        to: str,
+        display_name: str,
+        token: str,
+    ) -> None:
+        base = self.settings.PUBLIC_BASE_URL.rstrip("/")
+        minutes = self.settings.PENDING_REGISTRATION_TTL_SECONDS // 60
+        self._safe_send(
+            email_sender,
+            to=to,
+            subject="完成注册",
+            body=(
+                f"你好 {display_name}：\n\n"
+                "请打开下面的链接完成注册：\n\n"
+                f"{base}/verify-registration?token={token}\n\n"
+                f"链接 {minutes} 分钟内有效，且只能使用一次。"
+                "在链接被打开之前，账号尚未创建。\n"
+                "如果不是你发起的，忽略本邮件即可。\n"
+            ),
+        )
 
     # ------------------------------------------------------------------
     # 登录 / 登出

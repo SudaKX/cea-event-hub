@@ -97,10 +97,12 @@ class Settings(BaseSettings):
 
     # ---------- 找回与验证 ----------
     EMAIL_TOKEN_TTL_SECONDS: int = 24 * 3600
-    # 三个默认关闭的开关，等邮件接上再逐一打开
+    # 待验证注册占位的有效期。**分钟级**，与上面那个 24 小时刻意拉开距离：
+    # 它锁着用户名与邮箱，过期后会由清理任务释放（design.md 决策 19）
+    PENDING_REGISTRATION_TTL_SECONDS: int = 10 * 60
+    # 两个默认关闭的开关，等邮件接上再逐一打开
     REQUIRE_EMAIL_VERIFICATION: bool = False
     ALLOW_SELF_SERVICE_RESET: bool = False
-    REGISTRATION_INVITE_CODE: str = ""
 
     # ---------- 首次启动引导管理员 ----------
     ADMIN_BOOTSTRAP_ENABLED: bool = True
