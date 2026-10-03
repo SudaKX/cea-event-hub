@@ -146,3 +146,113 @@ def test_migration_connection_has_foreign_keys_disabled(migrated_db: Path) -> No
             assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 0
     finally:
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# 改写既有数据的迁移
+#
+# 下面三条各自改写一列既有数据，而它们的验证此前只存在于 `var/` 下**不入库**的
+# 脚本里 —— 也就是说"验过了"这句话在仓库里没有任何凭据。迁移改错数据的代价是
+# 静默的（码值全变 0、中文全变转义序列），值得入库钉住。
+# ---------------------------------------------------------------------------
+
+
+def _raw(database: Path, sql: str) -> list[tuple]:
+    connection = sqlite3.connect(database)
+    try:
+        return list(connection.execute(sql))
+    finally:
+        connection.close()
+
+
+def _exec(database: Path, *statements: str) -> None:
+    connection = sqlite3.connect(database)
+    try:
+        for statement in statements:
+            connection.execute(statement)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+@pytest.mark.slow
+def test_payload_escaped_json_is_rewritten_as_readable(migrated_db: Path) -> None:
+    """JSON 里被转义的中文要还原成可读形式。
+
+    默认的 `json.dumps` 把中文写成 `\\uXXXX`，于是按内容搜索永远匹配不上 ——
+    功能看起来在，实际对中文完全无效。迁移就地还原既有行。
+    """
+    config = _config(migrated_db)
+    command.upgrade(config, "24e091511e4a")  # 去转义迁移之前
+    _exec(
+        migrated_db,
+        "INSERT INTO events (id, title, status, entry_path, content_version, "
+        "submission_requires_login, submission_count, created_at, updated_at) "
+        "VALUES ('e1','t','live','index.html',0,0,1,'2026-01-01','2026-01-01')",
+        # 直接写转义后的原文：这正是升级前库里的样子
+        "INSERT INTO submissions (id, event_id, submitter, payload, status, created_at) "
+        "VALUES (1,'e1','a:alice','{\"name\": \"\\u5f20\\u4e09\"}',1,'2026-01-01')",
+    )
+    assert _raw(migrated_db, "SELECT payload FROM submissions")[0][0].count("\\u") == 2
+
+    command.upgrade(config, "head")
+
+    stored = _raw(migrated_db, "SELECT payload FROM submissions")[0][0]
+    assert "张三" in stored
+    assert "\\u5f20" not in stored
+
+
+@pytest.mark.slow
+def test_visibility_strings_become_integer_codes(migrated_db: Path) -> None:
+    """字符串可见性要按语义映射成码值，不能只改列类型。
+
+    SQLite 把 `'public'` 这样的非数字字符串转成 INTEGER 得到 **0** —— 只改类型的话
+    每一条活动都会静默变成"不公开"，整站目录一夜清空。所以迁移必须先把码值算出来。
+    """
+    config = _config(migrated_db)
+    command.upgrade(config, "8d54ac924e60")  # 可见性还是字符串的那一版
+    _exec(
+        migrated_db,
+        "INSERT INTO events (id, title, status, visibility, entry_path, "
+        "content_version, submission_requires_login, submission_count, "
+        "created_at, updated_at) VALUES "
+        "('hidden','t','live','private','index.html',0,0,0,'2026-01-01','2026-01-01')",
+        "INSERT INTO events (id, title, status, visibility, entry_path, "
+        "content_version, submission_requires_login, submission_count, "
+        "created_at, updated_at) VALUES "
+        "('shown','t','live','public','index.html',0,0,0,'2026-01-01','2026-01-01')",
+    )
+
+    command.upgrade(config, "9f1c2a4b7e03")
+
+    codes = dict(_raw(migrated_db, "SELECT id, visibility FROM events"))
+    assert codes == {"hidden": 0, "shown": 1}
+
+
+@pytest.mark.slow
+def test_submitter_counters_are_backfilled(migrated_db: Path) -> None:
+    """计数器要按既有提交回填。
+
+    不回填的话，管理员把活动设成"每人最多 1 份"时，一个已经交过 3 份的人在计数器里
+    没有行 —— 下一次提交会走"行不存在 → 插入 1"这条路直接成功，超限静默通过。
+    """
+    config = _config(migrated_db)
+    command.upgrade(config, "9f1c2a4b7e03")  # 计数器表还不存在
+    _exec(
+        migrated_db,
+        "INSERT INTO events (id, title, status, visibility, entry_path, "
+        "content_version, submission_requires_login, submission_count, "
+        "created_at, updated_at) VALUES ('e1','t','live',1,'index.html',0,0,0,"
+        "'2026-01-01','2026-01-01')",
+        "INSERT INTO submissions (event_id, submitter, payload, status, created_at) "
+        "VALUES ('e1','a:alice','{}',1,'2026-01-01'), "
+        "('e1','a:alice','{}',1,'2026-01-01'), "
+        "('e1','a:alice','{}',1,'2026-01-01'), "
+        "('e1','a:bob','{}',1,'2026-01-01')",
+    )
+
+    command.upgrade(config, "afbd98e64a5e")
+
+    counters = dict(_raw(migrated_db, "SELECT submitter, used FROM submitter_quotas"))
+    # 从没交过的人不该有行 —— 有行就等于凭空占了一份
+    assert counters == {"a:alice": 3, "a:bob": 1}
