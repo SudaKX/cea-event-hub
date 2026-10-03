@@ -66,6 +66,29 @@ def register_sqlite_pragmas(engine: Engine) -> None:
             cursor.close()
 
 
+def disable_sqlite_foreign_keys(engine: Engine) -> None:
+    """SQLite 上关掉外键约束。**只给迁移用，不要用在运行时引擎上。**
+
+    批处理模式把每个 ALTER 重写成"建临时表 -> 拷数据 -> DROP 原表 -> 改名"。
+    外键开着时，`DROP TABLE events` 会触发 `submissions` / `submission_files` /
+    `submitter_quotas` 的 ON DELETE CASCADE —— 改一个活动表的列，就把所有提交
+    连同附件记录清空，而且**没有任何报错**。
+
+    必须在 connect 事件里执行：`PRAGMA foreign_keys` 在事务内是空操作。
+
+    注册顺序有讲究：本函数要在 `register_sqlite_pragmas` **之后**调用，监听器
+    按注册顺序执行，后注册的覆盖先注册的。
+    """
+
+    @event.listens_for(engine, "connect")
+    def _on_connect(dbapi_connection: Any, connection_record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=OFF")
+        finally:
+            cursor.close()
+
+
 def build_engine(url: str) -> Engine:
     """按 URL 构造引擎，并挂上该方言需要的连接级设置。
 

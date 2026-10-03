@@ -1,0 +1,148 @@
+"""迁移本身的行为。
+
+这里的重点是**批处理模式不会连带删数据**。
+
+SQLite 不支持绝大多数 ALTER TABLE，所以 `render_as_batch=True` 会把每个变更
+重写成"建临时表 -> 拷数据 -> DROP 原表 -> 改名"。外键开着时，`DROP TABLE events`
+会触发 `submissions` / `submission_files` / `submitter_quotas` 的 ON DELETE
+CASCADE —— **改一个活动表的列，就把所有提交连同附件记录清空**，而且没有任何
+报错。
+
+这个 bug 真的发生过：可见性那次迁移把开发库里 26 条提交删到只剩 3 条。所以它
+值得一个跑真实迁移链的测试，而不是只靠人工验证。
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+from alembic import command
+from alembic.config import Config
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND = REPO_ROOT / "backend"
+
+#: 一条链上包含批处理 ALTER 的关键版本。逐个升过去，每一步都查数据还在不在。
+BATCH_STEPS = ["8d54ac924e60", "9f1c2a4b7e03"]
+
+
+def _config(database: Path) -> Config:
+    """给这份配置指定一个独立的库。
+
+    走 `attributes` 而不是 ini 里的 `sqlalchemy.url`：env.py 特意不从 ini 读 URL
+    （口令或 % 会被 configparser 当插值解析），attributes 是 Alembic 自己的扩展点。
+    """
+    config = Config(str(BACKEND / "alembic.ini"))
+    config.attributes["database_url"] = f"sqlite+pysqlite:///{database.as_posix()}"
+    return config
+
+
+@pytest.fixture
+def migrated_db(tmp_path) -> Path:
+    """一个空的库文件。建表与塞数据都由各用例自己做。"""
+    return tmp_path / "migration.db"
+
+
+def _counts(database: Path) -> dict[str, int]:
+    connection = sqlite3.connect(database)
+    try:
+        return {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("events", "submissions", "submission_files")
+        }
+    finally:
+        connection.close()
+
+
+def _seed(database: Path) -> None:
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute(
+            "INSERT INTO events (id, title, status, entry_path, content_version, "
+            "submission_requires_login, submission_count, created_at, updated_at) "
+            "VALUES ('e1','t','live','index.html',0,0,1,'2026-01-01','2026-01-01')"
+        )
+        connection.execute(
+            "INSERT INTO submissions (id, event_id, submitter, payload, status, created_at) "
+            "VALUES (1,'e1','a:alice','{}',1,'2026-01-01')"
+        )
+        connection.execute(
+            "INSERT INTO submission_files (submission_id, event_id, original_name, "
+            "stored_rel, size_bytes, sha256, mime, storage_state, created_at) "
+            "VALUES (1,'e1','a.pdf','x/a.pdf',10,'deadbeef','application/pdf',"
+            "'committed','2026-01-01')"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+@pytest.mark.slow
+def test_batch_migrations_do_not_delete_dependent_rows(migrated_db: Path) -> None:
+    """批处理 ALTER 不能连带删掉依赖表的行。
+
+    这条如果红了，说明迁移期间外键又开着 —— 表现是升级之后提交全没了，且**没有任何
+    报错**，所以要靠这个测试拦住。
+    """
+    config = _config(migrated_db)
+    # 停在批处理迁移之前
+    command.upgrade(config, "7d1b16f0e498")
+    _seed(migrated_db)
+    assert _counts(migrated_db) == {
+        "events": 1,
+        "submissions": 1,
+        "submission_files": 1,
+    }
+
+    for revision in BATCH_STEPS:
+        command.upgrade(config, revision)
+        counts = _counts(migrated_db)
+        assert counts == {"events": 1, "submissions": 1, "submission_files": 1}, (
+            f"升到 {revision} 之后数据丢了：{counts}"
+        )
+
+
+@pytest.mark.slow
+def test_full_upgrade_and_downgrade_round_trip(migrated_db: Path) -> None:
+    """整条链能升上去、也能降回来，且数据始终在。"""
+    config = _config(migrated_db)
+    command.upgrade(config, "7d1b16f0e498")
+    _seed(migrated_db)
+
+    command.upgrade(config, "head")
+    assert _counts(migrated_db)["submissions"] == 1
+
+    command.downgrade(config, "7d1b16f0e498")
+    assert _counts(migrated_db)["submissions"] == 1
+
+    command.upgrade(config, "head")
+    assert _counts(migrated_db)["submissions"] == 1
+
+
+@pytest.mark.slow
+def test_migration_connection_has_foreign_keys_disabled(migrated_db: Path) -> None:
+    """把修复本身钉住：迁移用的连接上，外键必须是关的。
+
+    直接断言连接状态而不是"升级后数据还在"，是为了让失败信息指向原因 ——
+    数据没了的报错很难让人联想到外键与批处理的相互作用。
+    """
+    from app.db.session import build_engine, disable_sqlite_foreign_keys
+
+    engine = build_engine(f"sqlite+pysqlite:///{migrated_db.as_posix()}")
+    try:
+        # build_engine 默认是开的（运行时就需要它）
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+
+        # 迁移环境在它之后注册，覆盖成关。
+        # 必须先 dispose：connect 事件只在**新建** DBAPI 连接时触发，而池子里
+        # 已经有一个连接了，直接再 connect 拿到的还是它、事件不会再跑一遍。
+        # 真实迁移里引擎是全新的，第一次连接必然新建，所以不存在这个问题。
+        disable_sqlite_foreign_keys(engine)
+        engine.dispose()
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 0
+    finally:
+        engine.dispose()
