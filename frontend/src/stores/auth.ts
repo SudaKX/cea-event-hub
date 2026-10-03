@@ -61,8 +61,13 @@ export const useAuthStore = defineStore('auth', () => {
     return loggedIn
   }
 
-  async function signUp(payload: authApi.RegisterPayload): Promise<User> {
-    // 注册刻意不自动登录："注册"与"获得会话"是两件明确的事
+  async function signUp(
+    payload: authApi.RegisterPayload,
+  ): Promise<authApi.RegistrationStarted> {
+    /*
+      注册刻意不自动登录 —— 而且现在**也登录不了**：这一步只建立待验证占位，
+      账号要到邮件链接被打开才创建。返回的只有"是否重入"。
+    */
     return authApi.register(payload)
   }
 

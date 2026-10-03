@@ -26,6 +26,7 @@ export const RESERVED_PREFIXES = [
   'register',
   'reset',
   'verify-email',
+  'verify-registration',
   'api',
   'content',
   'data',
@@ -67,6 +68,23 @@ const routes: RouteRecordRaw[] = [
     path: '/verify-email',
     name: 'verify-email',
     component: () => import('@/views/auth/VerifyEmailView.vue'),
+    meta: { public: true },
+  },
+  {
+    /*
+      核销页。它必须同时出现在两个地方，各自负责一件事：
+
+      - **路由表里**：让这个路径能被匹配到。`RESERVED_PREFIXES` 只管"不要把它当作
+        活动"这条判断，它本身不注册任何路由。
+      - **`RESERVED_PREFIXES` 里**：让它在通配兜底与活动路由的语义里被排除。
+
+      注意**顺序无关紧要**：vue-router 4 按路径具体度打分（静态段高于动态段），
+      所以 `/verify-registration` 无论声明在哪里都赢过 `/:eventId`。这里曾写着
+      "必须排在它之前" —— 那是 vue-router 3 的行为，实测不成立。
+    */
+    path: '/verify-registration',
+    name: 'verify-registration',
+    component: () => import('@/views/auth/VerifyRegistrationView.vue'),
     meta: { public: true },
   },
   {

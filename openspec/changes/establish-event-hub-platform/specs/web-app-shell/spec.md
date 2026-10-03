@@ -7,7 +7,9 @@
 ## ADDED Requirements
 
 ### Requirement: 路由结构与保留前缀
-单页应用 MUST 保留 `admin`、`login`、`register`、`reset`、`api`、`content`、`data`、`assets`、`sdk` 作为内部前缀。根路径 `/` MUST 作为平台首页（见下一条），除此以外的非保留顶层路径 MUST 被解释为活动标识并导航到活动页。无法匹配到已发布活动的标识 MUST 显示未找到页面。服务端 MUST 对未知路径回退到应用入口以支持前端路由。
+单页应用 MUST 保留 `admin`、`login`、`register`、`reset`、`verify-email`、`verify-registration`、`api`、`content`、`data`、`assets`、`sdk` 作为内部前缀。根路径 `/` MUST 作为平台首页（见下一条），除此以外的非保留顶层路径 MUST 被解释为活动标识并导航到活动页。无法匹配到已发布活动的标识 MUST 显示未找到页面。服务端 MUST 对未知路径回退到应用入口以支持前端路由。
+
+平台自身的静态路径（如验证落地页）MUST 同时出现在**路由表**与**保留前缀清单**两处：前者让它可被匹配，后者让它在"其余顶层路径都是活动"这条规则里被排除。二者缺一，那一页都会被当作活动标识。
 
 #### Scenario: 进入管理台
 - **WHEN** 访问 `/admin` 路径
@@ -28,6 +30,10 @@
 #### Scenario: 保留前缀不会被当作活动
 - **WHEN** 访问 `/login` 或 `/assets/...`
 - **THEN** 不会尝试将其作为活动标识解析
+
+#### Scenario: 静态路径赢过活动路由
+- **WHEN** 访问 `/verify-registration?token=...`（一个形如活动标识的单段路径）
+- **THEN** 进入注册核销页，而不是活动页或未找到页
 
 #### Scenario: 直接访问深层路径可正常加载
 - **WHEN** 直接在浏览器中打开一个管理台深层路径

@@ -12,8 +12,16 @@ export interface RegisterPayload {
   username: string
   password: string
   display_name?: string
-  email?: string
-  invite_code?: string
+  /** **必填**：注册要经邮箱验证才算完成，而验证的对象就是它 */
+  email: string
+}
+
+export interface RegistrationStarted {
+  /**
+   * 这是一次**重入** —— 同一对用户名与邮箱已有一条待验证的占位，本次没有新建、
+   * 也没有重发邮件。界面据此把文案改成"我们已经发过一封"。
+   */
+  ongoing: boolean
 }
 
 export async function login(payload: LoginPayload): Promise<User> {
@@ -21,9 +29,20 @@ export async function login(payload: LoginPayload): Promise<User> {
   return data.user
 }
 
-export async function register(payload: RegisterPayload): Promise<User> {
-  const { data } = await http.post<{ user: User }>('/auth/register', payload)
-  return data.user
+/**
+ * 提交注册（两阶段的第一步）。
+ *
+ * **返回的不是用户** —— 账号要到邮件链接被打开才创建。这里只拿到"请求已受理"，
+ * 以及它是不是一次重入。
+ */
+export async function register(payload: RegisterPayload): Promise<RegistrationStarted> {
+  const { data } = await http.post<RegistrationStarted>('/auth/register', payload)
+  return data
+}
+
+/** 凭邮件里的链接完成注册（两阶段的第二步）。成功后**不会自动登录**。 */
+export async function verifyRegistration(token: string): Promise<void> {
+  await http.post('/auth/register/verify', { token })
 }
 
 export async function logout(): Promise<void> {
