@@ -70,7 +70,30 @@ export interface CeaApi {
   me(): Promise<IdentityDescriptor>
   mySubmissions(): Promise<unknown>
   submit(options?: SubmitOptions): Promise<unknown>
-  toast(message: string, level?: 'info' | 'error'): void
+  toast(message: string, level?: 'ok' | 'info' | 'error'): void
+  /**
+   * 请宿主弹出确认框，等用户选择。`true` 表示用户点了确认。
+   *
+   * **这是替代 `confirm()` 的做法**，但它是**异步**的（原生 `confirm` 是同步的），
+   * 调用处记得 `await`：
+   *
+   * ```js
+   * if (await CEA.confirm('提交之后不能修改，确定吗？')) { … }
+   * ```
+   *
+   * 宿主会施加限制：文案截断到 300 字、一分钟内最多 6 次、无人应答 20 秒后按
+   * 取消结算。频率超限或文案为空会抛错。
+   */
+  confirm(
+    message: string,
+    options?: {
+      title?: string
+      confirmText?: string
+      cancelText?: string
+      /** 危险动作：确认按钮用警示色，且初始焦点落在取消上 */
+      danger?: boolean
+    },
+  ): Promise<boolean>
   navigate(to: string): void
   setTitle(title: string): void
   /**
@@ -315,6 +338,39 @@ const api: CeaApi = {
       { v: PROTOCOL_VERSION, type: IFRAME_MESSAGE.TOAST, payload: { message, level } },
       '*',
     )
+  },
+
+  /**
+   * 请宿主弹出确认框，等用户选择。
+   *
+   * **这是替代 `confirm()` 的做法**，返回 `true` 表示用户点了确认。
+   *
+   * ```js
+   * if (await CEA.confirm('提交之后不能修改，确定吗？')) { … }
+   * ```
+   *
+   * 注意它是**异步**的（原生 `confirm` 是同步的），调用处记得 `await`。
+   *
+   * 宿主会施加限制：文案截断到 300 字、一分钟内最多 6 次、无人应答 20 秒后按
+   * 取消结算。频率超限或文案为空会抛错。
+   */
+  async confirm(
+    message: string,
+    options: {
+      title?: string
+      confirmText?: string
+      cancelText?: string
+      /** 危险动作：确认按钮用警示色 */
+      danger?: boolean
+    } = {},
+  ): Promise<boolean> {
+    return (await bridge.call('ui.confirm', {
+      message,
+      title: options.title,
+      confirmText: options.confirmText,
+      cancelText: options.cancelText,
+      danger: options.danger === true,
+    })) === true
   },
 
   navigate(to: string) {

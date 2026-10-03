@@ -19,11 +19,29 @@
  */
 import { onMounted, ref, useId, watch } from 'vue'
 
-const props = defineProps<{
-  open: boolean
-  /** 对话框标题，同时作为无障碍名称 */
-  title: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    open: boolean
+    /** 对话框标题，同时作为无障碍名称 */
+    title: string
+    /**
+     * 尺寸档。
+     *
+     * - `md`：默认，适合放表格、文件清单这类宽内容
+     * - `sm`：确认框这种只有一两句话的场合。720px 宽配一行字的排版很难看，
+     *   而且**确认框要的是一眼看完**，宽了反而要扫视
+     */
+    size?: 'md' | 'sm'
+    /**
+     * 是否在标题右侧显示"关闭"按钮。
+     *
+     * 确认框把它关掉：那里已经有一个语义相同的"取消"，两个按钮做同一件事只会
+     * 让人多想一秒。`Esc` 与点遮罩仍然可关，退路一条没少。
+     */
+    showClose?: boolean
+  }>(),
+  { size: 'md', showClose: true },
+)
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -60,6 +78,7 @@ function onBackdropClick(event: MouseEvent): void {
   <dialog
     ref="dialog"
     class="modal"
+    :class="`modal--${size}`"
     :aria-labelledby="titleId"
     @close="emit('close')"
     @click="onBackdropClick"
@@ -67,7 +86,12 @@ function onBackdropClick(event: MouseEvent): void {
     <div v-if="open" class="modal__body">
       <header class="modal__head">
         <h2 :id="titleId" class="modal__title">{{ title }}</h2>
-        <button class="btn btn--ghost btn--small" type="button" @click="emit('close')">
+        <button
+          v-if="showClose"
+          class="btn btn--ghost btn--small"
+          type="button"
+          @click="emit('close')"
+        >
           关闭
         </button>
       </header>
@@ -80,7 +104,6 @@ function onBackdropClick(event: MouseEvent): void {
 <style scoped>
 /* 见文件头：这个规则块里不能出现 display */
 .modal {
-  width: min(720px, 92vw);
   max-height: 86vh;
   padding: 20px 22px 24px;
   overflow: auto;
@@ -88,6 +111,14 @@ function onBackdropClick(event: MouseEvent): void {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-surface);
   color: var(--bone);
+}
+
+.modal--md {
+  width: min(720px, 92vw);
+}
+
+.modal--sm {
+  width: min(440px, 92vw);
 }
 
 .modal__body {

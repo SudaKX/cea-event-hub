@@ -90,6 +90,19 @@ export const BRIDGE_OP = {
   STORAGE_REMOVE: 'storage.remove',
   /** 清空本活动的全部本地数据 */
   STORAGE_CLEAR: 'storage.clear',
+  /**
+   * 请宿主弹出确认框，并把用户的选择回给活动页。
+   *
+   * **它是 RPC 而不是单向消息**，因为调用方要等一个答案 —— 这与 `event:toast`
+   * （发出即完）根本不同。走已有的 RPC 通道同时白拿了超时、取消与请求关联。
+   *
+   * 名字带 `ui.` 前缀不只是好看：操作表有一条"命名空间.动作"的约定，测试在守着
+   * 它。一个光秃秃的 `confirm` 会让那条约定出现例外，而例外正是约定开始腐烂的地方。
+   *
+   * 提示文案由活动页提供，而对话框渲染在宿主界面上，所以宿主侧照样要收敛
+   * （长度、频率、超时），见 `BridgeHost` 的说明。
+   */
+  UI_CONFIRM: 'ui.confirm',
 } as const
 
 /**

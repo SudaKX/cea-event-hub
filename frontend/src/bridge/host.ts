@@ -48,6 +48,13 @@ export interface BridgeHostOptions {  iframe: HTMLIFrameElement
    * 调用方不必再校验，直接渲染即可。
    */
   onToast?: (payload: { level: BridgeToastLevel; message: string }) => void
+  /**
+   * 活动页请求弹一个确认框，`resolve` 出用户的选择。
+   *
+   * 参数已经收敛过（长度、文案），调用方直接渲染即可。**必须真的 resolve**：
+   * 悬着不放会让活动页的调用方一直等下去。
+   */
+  onConfirm?: (payload: BridgeConfirmRequest) => Promise<boolean>
   onTitle?: (title: string) => void
   /**
    * 活动页完成握手（发出就绪消息且协议主版本兼容）。
@@ -83,6 +90,30 @@ export const TOAST_MAX_LENGTH = 200
 /** 频率限制的窗口与配额。 */
 const TOAST_WINDOW_MS = 10_000
 const TOAST_MAX_PER_WINDOW = 5
+
+/** 活动页请求的确认框。文案已收敛，宿主直接渲染。 */
+export interface BridgeConfirmRequest {
+  title: string
+  message: string
+  confirmText?: string
+  cancelText?: string
+  danger: boolean
+}
+
+/** 确认框文案的长度上限。比通知宽松一点：确认框本来就要说清后果。 */
+export const CONFIRM_MAX_LENGTH = 300
+
+/**
+ * 确认框的自动结算时间。
+ *
+ * **必须明显小于 RPC 超时（默认 30 秒）**：否则调用方先拿到超时错误，而对话框
+ * 还杵在用户屏幕上，两边对同一件事的认知对不上。
+ */
+const CONFIRM_TIMEOUT_MS = 20_000
+
+/** 确认框的频率窗口。它比通知更有侵入性 —— 会拦住用户并索要一次点击。 */
+const CONFIRM_WINDOW_MS = 60_000
+const CONFIRM_MAX_PER_WINDOW = 6
 
 /** 认不出来的语气一律当 info —— 提示本身无害，没必要为多写一个字整条丢掉。 */
 function normalizeToastLevel(level: unknown): BridgeToastLevel {
@@ -145,6 +176,8 @@ export class BridgeHost {
    * 通知栈刷爆 —— 真正的影响不是"吵"，而是**宿主自己的提示被挤掉**。
    */
   private toastTimes: number[] = []
+  /** 确认框的请求时刻，窗口更长、配额更紧（它比通知更有侵入性） */
+  private confirmTimes: number[] = []
 
   constructor(options: BridgeHostOptions) {
     this.options = options
@@ -372,6 +405,9 @@ export class BridgeHost {
         return { ok: true }
       }
 
+      case BRIDGE_OP.UI_CONFIRM:
+        return this.runConfirm(args)
+
       case BRIDGE_OP.FORM_SUBMIT:
       case BRIDGE_OP.FORM_SUBMIT_FILES: {
         // 提交前短路：活动要求登录而当前未登录时，**不发出网络请求**
@@ -466,6 +502,44 @@ export class BridgeHost {
       pending.reject(error)
       this.pending.delete(requestId)
     }
+  }
+
+  /**
+   * 活动页请求的确认框。
+   *
+   * 与通知同一套收敛，外加一条：**超时要自己结算**。调用方在等一个 promise，
+   * 而对话框会被用户晾在那儿；到点按"取消"结算是唯一不会让人干等下去的做法。
+   * 时限取得比 RPC 超时短，否则调用方先拿到超时错误、对话框却还开着。
+   *
+   * 频率上限比通知紧、窗口比通知长：确认框会拦住用户并索要一次点击，比一条浮层
+   * 有侵入性得多。
+   */
+  private async runConfirm(args: Record<string, unknown>): Promise<boolean> {
+    const now = Date.now()
+    this.confirmTimes = this.confirmTimes.filter((at) => now - at < CONFIRM_WINDOW_MS)
+    if (this.confirmTimes.length >= CONFIRM_MAX_PER_WINDOW) {
+      throw new BridgeError(BRIDGE_ERROR.RATE_LIMITED, '确认请求过于频繁')
+    }
+    this.confirmTimes.push(now)
+
+    const text = (value: unknown): string =>
+      typeof value === 'string' ? value.trim().slice(0, CONFIRM_MAX_LENGTH) : ''
+
+    const message = text(args.message)
+    if (!message) throw new BridgeError(BRIDGE_ERROR.VALIDATION_FAILED, '确认内容不能为空')
+
+    if (!this.options.onConfirm) {
+      throw new BridgeError(BRIDGE_ERROR.UNSUPPORTED, '宿主未提供确认对话框')
+    }
+
+    return this.options.onConfirm({
+      // 标题不给就沿用活动页的文案当标题，总比一个空标题好
+      title: text(args.title) || '请确认',
+      message,
+      confirmText: text(args.confirmText) || undefined,
+      cancelText: text(args.cancelText) || undefined,
+      danger: args.danger === true,
+    })
   }
 
   // ------------------------------------------------------------------

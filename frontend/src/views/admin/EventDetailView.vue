@@ -8,11 +8,13 @@ import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } f
 import Checkbox from '@/components/ui/Checkbox.vue'
 import FileInput from '@/components/ui/FileInput.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
+import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { EVENT_VISIBILITY, EVENT_VISIBILITY_OPTIONS, parseVisibility } from '@/domain/event'
 import type { ContentFile, EventAdmin } from '@/types/api'
 
 const toast = useToast()
+const confirm = useConfirm()
 const props = defineProps<{ eventId: string }>()
 
 /** 状态选项把后果写在标签里 —— 光看 draft/live/archived 不知道意味着什么 */
@@ -130,7 +132,13 @@ async function onDeploy(): Promise<void> {
 }
 
 async function onDeleteEvent(): Promise<void> {
-  if (!window.confirm(`删除活动 ${props.eventId}？提交与附件会一并移除，不可撤销。`)) return
+  const ok = await confirm.ask({
+    title: '删除活动',
+    message: `删除活动 ${props.eventId}？提交与附件会一并移除，此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await deleteEvent(props.eventId)
     // 先推通知再跳转：跳转之后本组件会卸载，但通知栈在 App 层，不受影响

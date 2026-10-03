@@ -22,6 +22,7 @@ import Modal from '@/components/ui/Modal.vue'
 import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import SplitPane from '@/components/ui/SplitPane.vue'
+import { useConfirm } from '@/composables/useConfirm'
 import { useDragSelect } from '@/composables/useDragSelect'
 import { useToast } from '@/composables/useToast'
 import {
@@ -49,6 +50,7 @@ const detail = ref<Submission | null>(null)
 const helpOpen = ref(false)
 
 const toast = useToast()
+const confirm = useConfirm()
 
 const submissions = ref<Submission[]>([])
 const total = ref(0)
@@ -211,7 +213,13 @@ async function onQueueReview(status: number): Promise<void> {
 async function onQueueDelete(): Promise<void> {
   const ids = queue.value.map((item) => item.id)
   if (ids.length === 0) return
-  if (!window.confirm(`删除队列里的 ${ids.length} 条提交？名额会立即释放。`)) return
+  const ok = await confirm.ask({
+    title: '删除提交',
+    message: `删除队列里的 ${ids.length} 条提交？名额会立即释放。此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await deleteSubmissions(ids)
     queue.value = []

@@ -19,7 +19,13 @@ vi.mock('@/api/submissions', () => ({
   mySubmissions: (...args: unknown[]) => mySubmissions(...args),
 }))
 
-import { BridgeError, BridgeHost, TOAST_MAX_LENGTH, mapApiError } from './host'
+import {
+  BridgeError,
+  BridgeHost,
+  CONFIRM_MAX_LENGTH,
+  TOAST_MAX_LENGTH,
+  mapApiError,
+} from './host'
 import { BRIDGE_ERROR, BRIDGE_OP, HOST_MESSAGE, IFRAME_MESSAGE, PROTOCOL_VERSION } from './protocol'
 import { ApiError } from '@/api/client'
 
@@ -59,9 +65,12 @@ interface Harness {
   onReady: ReturnType<typeof vi.fn>
   onNavigate: ReturnType<typeof vi.fn>
   onToast: ReturnType<typeof vi.fn>
+  onConfirm: ReturnType<typeof vi.fn>
 }
 
-function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {}): Harness {
+function makeHost(
+  options: { loggedIn?: boolean; requiresLogin?: boolean; withoutConfirm?: boolean } = {},
+): Harness {
   const iframe = makeIframe()
   const sent: Harness['sent'] = []
 
@@ -80,6 +89,7 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
   const onReady = vi.fn()
   const onNavigate = vi.fn()
   const onToast = vi.fn()
+  const onConfirm = vi.fn()
 
   const host = new BridgeHost({
     iframe,
@@ -100,6 +110,8 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
     onReady,
     onNavigate,
     onToast,
+    // 用来验证"宿主没提供确认框"那条分支 —— 只靠一个恒真的桩走不到那里
+    ...(options.withoutConfirm ? {} : { onConfirm }),
     requestTimeoutMs: 50,
     readyTimeoutMs: 20,
   })
@@ -113,6 +125,7 @@ function makeHost(options: { loggedIn?: boolean; requiresLogin?: boolean } = {})
     onReady,
     onNavigate,
     onToast,
+    onConfirm,
   }
 }
 
@@ -780,6 +793,101 @@ describe('活动页的提示（CEA.toast）', () => {
     fireToast(harness, { level: 'info', message: 42 })
 
     expect(harness.onToast).not.toHaveBeenCalled()
+  })
+})
+
+describe('活动页请求的确认框（CEA.confirm）', () => {
+  /*
+    与通知不同，确认框走 RPC：调用方要等一个答案。这里盯住三件事 —— 文案收敛、
+    频率收紧、以及**永远不要悬着不答复**。
+  */
+  async function rpcConfirm(harness: Harness, args: Record<string, unknown>) {
+    rpc(harness, BRIDGE_OP.UI_CONFIRM, args, 'c1')
+    await flush()
+    return harness.sent.filter((m) => m.type === HOST_MESSAGE.RESULT && m.id === 'c1').at(-1)
+  }
+
+  function startConfirming(answer = true): Harness {
+    vi.clearAllMocks()
+    const harness = makeHost()
+    harness.onConfirm.mockResolvedValue(answer)
+    harness.host.start()
+    return harness
+  }
+
+  it('把请求交给宿主，并把答案回给活动页', async () => {
+    const harness = startConfirming(true)
+    const result = await rpcConfirm(harness, { message: '确定吗？', title: '删除' })
+
+    expect(harness.onConfirm).toHaveBeenCalledWith({
+      title: '删除',
+      message: '确定吗？',
+      confirmText: undefined,
+      cancelText: undefined,
+      danger: false,
+    })
+    expect(result?.payload).toMatchObject({ ok: true, data: true })
+  })
+
+  it('用户取消时回 false，而不是报错', async () => {
+    // "没确认"是一个正常答案，不是失败 —— 报错会让活动页把正常路径写成异常处理
+    const harness = startConfirming(false)
+    const result = await rpcConfirm(harness, { message: '确定吗？' })
+
+    expect(result?.payload).toMatchObject({ ok: true, data: false })
+  })
+
+  it('不给标题时用兜底标题，而不是空标题', async () => {
+    const harness = startConfirming()
+    await rpcConfirm(harness, { message: '确定吗？' })
+
+    const [payload] = harness.onConfirm.mock.calls[0]!
+    expect((payload as { title: string }).title).toBe('请确认')
+  })
+
+  it('超长文案被截断', async () => {
+    const harness = startConfirming()
+    await rpcConfirm(harness, { message: 'あ'.repeat(2000), title: 'あ'.repeat(2000) })
+
+    const [payload] = harness.onConfirm.mock.calls[0]! as [{ message: string; title: string }]
+    expect(payload.message).toHaveLength(CONFIRM_MAX_LENGTH)
+    expect(payload.title).toHaveLength(CONFIRM_MAX_LENGTH)
+  })
+
+  it('文案为空时拒绝，且不开对话框', async () => {
+    const harness = startConfirming()
+    const result = await rpcConfirm(harness, { message: '   ' })
+
+    expect(harness.onConfirm).not.toHaveBeenCalled()
+    expect(result?.payload).toMatchObject({ ok: false })
+  })
+
+  it('一分钟内超过 6 次会被拒绝', async () => {
+    /*
+      确认框比通知更有侵入性：它会拦住用户、索要一次点击。所以配额更紧、窗口更长。
+    */
+    const harness = startConfirming()
+    for (let index = 1; index <= 8; index++) {
+      rpc(harness, BRIDGE_OP.UI_CONFIRM, { message: `第 ${index} 次` }, `c${index}`)
+    }
+    await flush()
+
+    expect(harness.onConfirm).toHaveBeenCalledTimes(6)
+    const last = harness.sent
+      .filter((m) => m.type === HOST_MESSAGE.RESULT && m.id === 'c8')
+      .at(-1)
+    expect(last?.payload).toMatchObject({ ok: false })
+  })
+
+  it('宿主没提供确认框时明确报不支持', async () => {
+    // 静默成功会让活动页以为用户点了确认
+    vi.clearAllMocks()
+    const harness = makeHost({ withoutConfirm: true })
+    harness.host.start()
+    const result = await rpcConfirm(harness, { message: '确定吗？' })
+
+    expect(result?.payload).toMatchObject({ ok: false })
+    expect(JSON.stringify(result?.payload)).toContain('unsupported_op')
   })
 })
 

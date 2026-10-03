@@ -20,6 +20,7 @@ import { CONTENT_BASE } from '@/api/client'
 import { getPublicEvent } from '@/api/events'
 import { BridgeHost } from '@/bridge/host'
 import { getClientId } from '@/bridge/clientId'
+import { useConfirm, type ConfirmOptions } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { contentEntryExists } from './contentProbe'
 import {
@@ -38,6 +39,13 @@ const props = defineProps<{ eventId: string }>()
 const router = useRouter()
 const auth = useAuthStore()
 const toast = useToast()
+const confirm = useConfirm()
+
+/**
+ * 活动页的确认框最多开多久。**必须明显小于桥接的 RPC 超时（30 秒）** —— 否则
+ * 调用方先拿到超时错误，而对话框还杵在用户屏幕上，两边对同一件事的认知对不上。
+ */
+const CONFIRM_TIMEOUT_MS: ConfirmOptions['timeoutMs'] = 20_000
 
 const iframe = ref<HTMLIFrameElement | null>(null)
 const event = ref<EventPublic | null>(null)
@@ -166,6 +174,18 @@ function buildHost(): void {
       语气与长度已经在桥接层收敛过（`BridgeHost.handleToast`），这里直接渲染。
     */
     onToast: ({ level, message }) => toast.push(level, message),
+
+    /*
+      活动页的确认框同理：渲染在宿主界面上，焦点与 Esc 由宿主自己的组件负责。
+
+      `fromEvent` 会多出一行来源说明 —— 与通知不同，这个框会拦住用户并索要一次
+      点击，而按钮文案由活动页给。见 `ConfirmHost` 的说明。
+
+      `timeoutMs` 必须小于桥接的 RPC 超时（30 秒），否则调用方先拿到超时错误、
+      而对话框还开在屏幕上。
+    */
+    onConfirm: (payload) =>
+      confirm.ask({ ...payload, fromEvent: true, timeoutMs: CONFIRM_TIMEOUT_MS }),
     // 真的连上了：这是收起加载覆盖层的唯一正当理由
     onReady: () => finishLoading(),
     onBridgeMissing: () => {

@@ -32,6 +32,7 @@ vi.mock('@/api/submissions', () => ({
   attachmentUrl: (id: number, fileId: number) => `/api/v1/submissions/${id}/files/${fileId}`,
 }))
 
+import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import SubmissionsView from './SubmissionsView.vue'
 import { SUBMISSION_STATUS } from '@/domain/submission'
@@ -106,8 +107,9 @@ const dialog = (wrapper: ReturnType<typeof mount>) =>
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // 通知是模块级状态，会跨用例残留
+  // 通知与确认框都是模块级状态，会跨用例残留
   useToast().clear()
+  useConfirm().clear()
   // 默认"全都改成功"
   reviewSubmissions.mockImplementation((ids: number[]) => Promise.resolve(ids.length))
   deleteSubmissions.mockResolvedValue(0)
@@ -313,29 +315,34 @@ describe('队列', () => {
 
   it('删除把队列里的 id 一次交给批量接口', async () => {
     const wrapper = await mountView()
-    vi.stubGlobal('confirm', vi.fn(() => true))
     await enqueueRows(wrapper, [0, 1])
 
     await button(wrapper, '删除').trigger('click')
+    // 确认框走的是我们自己的组件，不再是 window.confirm —— 直接结算它
+    await vi.waitFor(() => expect(useConfirm().request.value).not.toBeNull())
+    useConfirm().settle(true)
     await vi.waitFor(() => expect(deleteSubmissions).toHaveBeenCalled())
 
     expect(deleteSubmissions.mock.calls[0]![0]).toEqual([1, 2])
-    vi.unstubAllGlobals()
     wrapper.unmount()
   })
 
-  it('删除前要确认', async () => {
+  it('删除前要确认，取消就什么都不做', async () => {
     const wrapper = await mountView()
-    const confirm = vi.fn(() => false)
-    vi.stubGlobal('confirm', confirm)
     await enqueueRows(wrapper, [0])
 
     await button(wrapper, '删除').trigger('click')
+    await vi.waitFor(() => expect(useConfirm().request.value).not.toBeNull())
+
+    // 确认框的文案要能说清后果
+    expect(useConfirm().request.value!.message).toContain('不可撤销')
+
+    useConfirm().settle(false)
     await wrapper.vm.$nextTick()
 
-    expect(confirm).toHaveBeenCalled()
     expect(deleteSubmissions).not.toHaveBeenCalled()
-    vi.unstubAllGlobals()
+    // 取消之后框要收掉
+    expect(useConfirm().request.value).toBeNull()
     wrapper.unmount()
   })
 
@@ -586,12 +593,12 @@ describe('点行看详情', () => {
     const wrapper = await mountView()
 
     const remove = wrapper.findAll('button').find((b) => b.text() === '删除')!
-    // 这里不点确认，所以删除不会真的发生，只看对话框有没有被顺带打开
-    vi.stubGlobal('confirm', vi.fn(() => false))
+    // 这里不结算确认框，所以删除不会真的发生，只看详情对话框有没有被顺带打开
     await remove.trigger('click')
+    await wrapper.vm.$nextTick()
 
     expect(dialog(wrapper).open).toBe(false)
-    vi.unstubAllGlobals()
+    useConfirm().settle(false)
     wrapper.unmount()
   })
 
