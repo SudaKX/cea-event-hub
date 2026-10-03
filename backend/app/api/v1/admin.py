@@ -129,6 +129,7 @@ def create_event(
         submissions_open_at=payload.submissions_open_at,
         submissions_close_at=payload.submissions_close_at,
         max_submissions=payload.max_submissions,
+        visibility=payload.visibility,
         owner=admin,
     )
     # 新建活动一律为 draft，必须显式发布才会出现在公开接口

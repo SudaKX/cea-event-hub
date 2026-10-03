@@ -6,6 +6,14 @@ import { RouterLink } from 'vue-router'
 import { ApiError } from '@/api/client'
 import { createEvent, listAdminEvents } from '@/api/events'
 import Checkbox from '@/components/ui/Checkbox.vue'
+import Select from '@/components/ui/Select.vue'
+import {
+  EVENT_VISIBILITY,
+  EVENT_VISIBILITY_OPTIONS,
+  parseVisibility,
+  visibilityLabel,
+  visibilityTone,
+} from '@/domain/event'
 import type { EventAdmin } from '@/types/api'
 
 const events = ref<EventAdmin[]>([])
@@ -21,6 +29,8 @@ const draft = ref({
   summary: '',
   submission_requires_login: false,
   max_submissions: '' as string,
+  // 默认公开：与加这个字段之前的行为一致
+  visibility: String(EVENT_VISIBILITY.PUBLIC),
 })
 
 async function load(): Promise<void> {
@@ -47,6 +57,7 @@ async function onCreate(): Promise<void> {
       submission_requires_login: draft.value.submission_requires_login,
       // 空串表示"不限额"，不传该字段即走默认
       max_submissions: draft.value.max_submissions === '' ? undefined : Number(draft.value.max_submissions),
+      visibility: parseVisibility(draft.value.visibility),
     })
     showCreate.value = false
     draft.value = {
@@ -55,6 +66,7 @@ async function onCreate(): Promise<void> {
       summary: '',
       submission_requires_login: false,
       max_submissions: '',
+      visibility: String(EVENT_VISIBILITY.PUBLIC),
     }
     await load()
   } catch (caught) {
@@ -114,6 +126,19 @@ onMounted(load)
         <textarea v-model="draft.summary" />
       </label>
 
+      <label class="field">
+        <span class="field__label">可见性</span>
+        <Select
+          :model-value="draft.visibility"
+          :options="EVENT_VISIBILITY_OPTIONS"
+          aria-label="可见性"
+          @update:model-value="(v) => (draft.visibility = v)"
+        />
+        <span class="field__hint dim">
+          不公开的活动**不出现在任何公开面**，但知道标识的人仍可直接用链接打开。
+        </span>
+      </label>
+
       <div class="create__grid">
         <!--
           复选框自成一行控件。裸的 <input type="checkbox"> 会被 .field input 的
@@ -152,6 +177,7 @@ onMounted(load)
             <th>标识</th>
             <th>标题</th>
             <th>状态</th>
+            <th>可见性</th>
             <th>提交</th>
             <th>配额</th>
             <th>内容版本</th>
@@ -166,6 +192,11 @@ onMounted(load)
             </td>
             <td>{{ event.title }}</td>
             <td><span class="tag" :class="`tag--${event.status}`">{{ event.status }}</span></td>
+            <td>
+              <span class="tag" :class="`tag--${visibilityTone(event.visibility)}`">
+                {{ visibilityLabel(event.visibility) }}
+              </span>
+            </td>
             <td class="num">{{ event.submission_requires_login ? '需登录' : '可匿名' }}</td>
             <td class="num">{{ quotaText(event) }}</td>
             <td class="num">v{{ event.content_version }}</td>

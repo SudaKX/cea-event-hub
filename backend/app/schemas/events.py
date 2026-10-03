@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.enums import EventVisibility
 from app.db.models import Event
 
 
@@ -35,11 +36,20 @@ class EventPublic(BaseModel):
     submissions_open_at: datetime | None = None
     submissions_close_at: datetime | None = None
     quota: QuotaState
+    #: 是否被置顶（可见性码值为 2）。首页凭它决定进不进卡片区。
+    #:
+    #: 公开响应给出的是**布尔**而不是码值：码值 0 意味着"不公开"，而拿到链接的
+    #: 访客不需要知道这条是未公开的。
+    pinned: bool = False
 
 
 class EventAdmin(EventPublic):
-    """管理端视图：额外暴露配额覆盖值与所有者。"""
+    """管理端视图：额外暴露配额覆盖值、所有者与**可见性码值**。
 
+    管理端要的是完整码值（0/1/2），否则设成不可见之后就再也找不回来。
+    """
+
+    visibility: int
     max_submissions: int | None = None
     owner_id: int | None = None
     created_at: datetime
@@ -58,6 +68,8 @@ class EventCreateRequest(BaseModel):
     submissions_open_at: datetime | None = None
     submissions_close_at: datetime | None = None
     max_submissions: int | None = Field(default=None, ge=0)
+    #: 可见性码值 0/1/2，不给则按 1（公开）建
+    visibility: int | None = None
 
 
 class EventUpdateRequest(BaseModel):
@@ -72,6 +84,7 @@ class EventUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     summary: str | None = None
     status: str | None = None
+    visibility: int | None = None
     entry_path: str | None = Field(default=None, max_length=255)
     submission_requires_login: bool | None = None
     submissions_open_at: datetime | None = None
@@ -108,12 +121,14 @@ def to_public(event: Event, quota: QuotaState) -> EventPublic:
         submissions_open_at=event.submissions_open_at,
         submissions_close_at=event.submissions_close_at,
         quota=quota,
+        pinned=event.visibility == EventVisibility.PINNED.value,
     )
 
 
 def to_admin(event: Event, quota: QuotaState) -> EventAdmin:
     return EventAdmin(
         **to_public(event, quota).model_dump(),
+        visibility=event.visibility,
         max_submissions=event.max_submissions,
         owner_id=event.owner_id,
         created_at=event.created_at,

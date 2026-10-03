@@ -39,6 +39,8 @@ export interface EventCreatePayload {
   submissions_open_at?: string | null
   submissions_close_at?: string | null
   max_submissions?: number | null
+  /** 可见性码值 0/1/2，取值见 @/domain/event */
+  visibility?: number
 }
 
 export async function createEvent(payload: EventCreatePayload): Promise<EventAdmin> {

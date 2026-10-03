@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session
 
+from app.core.enums import EventVisibility
 from app.db.models import Event
 
 
@@ -21,8 +22,19 @@ class EventRepository:
         session.delete(event)
 
     def list_public(self, session: Session, *, status: str) -> Select:
-        """公开目录：只列某种状态的活动（通常是 live）。"""
-        return select(Event).where(Event.status == status).order_by(Event.id)
+        """公开目录：已发布且**在公开面露过面**（可见性 > 0）的活动。
+
+        置顶的排前面，其次按标识。排序放在这里而不是让调用方再排一遍，
+        免得两处顺序不一致。
+        """
+        return (
+            select(Event)
+            .where(
+                Event.status == status,
+                Event.visibility > EventVisibility.INVISIBLE.value,
+            )
+            .order_by(Event.visibility.desc(), Event.id)
+        )
 
     def list_all(self, session: Session, *, status: str | None = None) -> Select:
         statement = select(Event).order_by(Event.created_at.desc())

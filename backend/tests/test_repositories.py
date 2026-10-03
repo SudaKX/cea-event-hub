@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.clock import utcnow
-from app.core.enums import EventStatus, UserRole
+from app.core.enums import EventStatus, EventVisibility, UserRole
 from app.core.ports import (
     EmailSender,
     FileStorage,
@@ -239,6 +239,27 @@ class TestEventRepository:
                 event_repo.list_public(session, status=EventStatus.LIVE.value)
             ).all()
         assert [e.id for e in public] == ["live-1"]
+
+    def test_list_public_excludes_invisible_events(self, test_db, repos) -> None:
+        """不可见的活动不进目录 —— 但它是"未公开"，不是"不存在"，仍可按标识取到。"""
+        _, _, event_repo, _ = repos
+        with test_db.session() as session:
+            _make_event(session, "listed", status=EventStatus.LIVE.value)
+            _make_event(
+                session,
+                "unlisted",
+                status=EventStatus.LIVE.value,
+                visibility=EventVisibility.INVISIBLE.value,
+            )
+
+        with test_db.session() as session:
+            public = session.scalars(
+                event_repo.list_public(session, status=EventStatus.LIVE.value)
+            ).all()
+            # 直接取仍然拿得到
+            unlisted = event_repo.get(session, "unlisted")
+        assert [e.id for e in public] == ["listed"]
+        assert unlisted is not None
 
     def test_count(self, test_db, repos) -> None:
         _, _, event_repo, _ = repos

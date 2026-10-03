@@ -8,6 +8,7 @@ import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } f
 import Checkbox from '@/components/ui/Checkbox.vue'
 import FileInput from '@/components/ui/FileInput.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
+import { EVENT_VISIBILITY, EVENT_VISIBILITY_OPTIONS, parseVisibility } from '@/domain/event'
 import type { ContentFile, EventAdmin } from '@/types/api'
 
 const props = defineProps<{ eventId: string }>()
@@ -32,6 +33,7 @@ const form = ref({
   title: '',
   summary: '',
   status: 'draft',
+  visibility: String(EVENT_VISIBILITY.PUBLIC),
   submission_requires_login: false,
   max_submissions: '' as string,
 })
@@ -60,6 +62,7 @@ async function loadDetail(): Promise<void> {
     title: detail.title,
     summary: detail.summary ?? '',
     status: detail.status,
+    visibility: String(detail.visibility),
     submission_requires_login: detail.submission_requires_login,
     max_submissions: detail.max_submissions === null ? '' : String(detail.max_submissions),
   }
@@ -85,6 +88,7 @@ async function onSave(): Promise<void> {
       title: form.value.title,
       summary: form.value.summary,
       status: form.value.status,
+      visibility: parseVisibility(form.value.visibility),
       submission_requires_login: form.value.submission_requires_login,
       max_submissions: form.value.max_submissions === '' ? null : Number(form.value.max_submissions),
     })
@@ -162,6 +166,22 @@ watch(() => props.eventId, load)
           </label>
 
           <Select v-model="form.status" label="状态" :options="STATUS_OPTIONS" />
+        </div>
+
+        <div class="grid">
+          <Select
+            v-model="form.visibility"
+            label="可见性"
+            :options="EVENT_VISIBILITY_OPTIONS"
+          />
+
+          <div class="field">
+            <span class="field__label">&nbsp;</span>
+            <span class="field__hint dim">
+              不公开的活动<strong>不出现在任何公开面</strong>，但知道标识的人仍可
+              直接用链接打开 —— 也就是"未公开"，不是"不存在"。置顶的另进首页卡片区。
+            </span>
+          </div>
         </div>
 
         <label class="field">

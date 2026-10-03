@@ -24,6 +24,36 @@ class EventStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class EventVisibility(IntEnum):
+    """活动在公开面可见的程度。
+
+    码值是**对外契约**的一部分（列表端点、首页、补全都按它走），改动必须配迁移：
+
+    - `INVISIBLE = 0` —— 不进任何公开面。但**仍可按标识访问**：它是"未公开"，
+      不是"不存在"
+    - `PUBLIC = 1` —— 进公开列表端点与首页的标识补全
+    - `PINNED = 2` —— 在此之上，还进首页的卡片区
+
+    用一个有序刻度而不是"是否公开 + 是否置顶"两个布尔，是因为**置顶蕴含公开**：
+    把一条不公开的活动置顶没有意义，两个布尔会允许这种无意义组合存在。
+
+    与 `EventStatus` 是两件事：`status` 决定**能不能访问**（draft 一律 404），
+    `visibility` 决定**在公开面露多少**。
+    """
+
+    INVISIBLE = 0
+    PUBLIC = 1
+    PINNED = 2
+
+
+#: 可见性码值到人读名称的映射。管理端标签与文档共用同一份，避免各自推导。
+EVENT_VISIBILITY_LABELS: dict[int, str] = {
+    EventVisibility.INVISIBLE: "不公开",
+    EventVisibility.PUBLIC: "公开",
+    EventVisibility.PINNED: "公开并置顶",
+}
+
+
 class SubmissionStatus(IntEnum):
     """提交的审核状态。
 
@@ -68,7 +98,9 @@ DEFAULT_SUBMISSION_KIND = "_default"
 
 __all__ = [
     "DEFAULT_SUBMISSION_KIND",
+    "EVENT_VISIBILITY_LABELS",
     "EventStatus",
+    "EventVisibility",
     "SUBMISSION_STATUS_LABELS",
     "StorageState",
     "SubmissionStatus",

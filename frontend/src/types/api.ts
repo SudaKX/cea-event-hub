@@ -33,9 +33,25 @@ export interface EventPublic {
   submissions_open_at: string | null
   submissions_close_at: string | null
   quota: QuotaState
+  /**
+   * 是否被置顶（可见性码值为 2）。首页凭它决定进不进卡片区。
+   *
+   * 公开响应给的是**布尔**而不是码值：码值 0 意味着"不公开"，而拿到链接的访客
+   * 不需要知道这条是未公开的。
+   */
+  pinned: boolean
 }
 
 export interface EventAdmin extends EventPublic {
+  /**
+   * 在公开面露多少。码值是**对外契约**，取值见 `EVENT_VISIBILITY`。
+   *
+   * 与 `status` 正交：`status` 管**能不能访问**（draft 一律 404），`visibility`
+   * 管**在公开面露多少**。
+   *
+   * 只在管理端响应里出现完整码值：设成不可见之后就靠它找回来。
+   */
+  visibility: number
   max_submissions: number | null
   owner_id: number | null
   created_at: string

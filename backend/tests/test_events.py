@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.core.clock import utcnow
 from app.core.config import settings as global_settings
-from app.core.enums import EventStatus
+from app.core.enums import EventStatus, EventVisibility
 from app.db.models import Event
 from app.services.events import EventService
 
@@ -182,6 +182,142 @@ class TestPublicVisibility:
         _seed_event(test_db, "live-one")
         assert client.get(PUBLIC).status_code == 200
         assert client.get(f"{PUBLIC}/live-one").status_code == 200
+
+
+class TestEventVisibility:
+    """三档可见性：0 不公开 / 1 公开 / 2 公开并置顶。
+
+    与 `status` 正交：status 管**能不能访问**，visibility 管**在公开面露多少**。
+
+    最容易做错的两处：把 0 做成"访问不了"（那就等于 draft，管理员没法把链接直接
+    发给参与者），以及把 1 做成"哪儿都不出现"（那它就和 0 没有区别了）。
+    """
+
+    def _ids(self, admin_client) -> list[str]:
+        return [e["id"] for e in admin_client.get(PUBLIC).json()["events"]]
+
+    def test_invisible_events_are_not_listed(self, admin_client, test_db) -> None:
+        _seed_event(test_db, "listed", status=EventStatus.LIVE.value)
+        _seed_event(
+            test_db,
+            "unlisted",
+            status=EventStatus.LIVE.value,
+            visibility=EventVisibility.INVISIBLE.value,
+        )
+
+        assert self._ids(admin_client) == ["listed"]
+
+    def test_invisible_event_is_still_reachable_by_id(self, client, test_db) -> None:
+        """**这是这一组里最重要的一条。**
+
+        不可见是"未公开"，不是"不存在"。做成 404 会同时伤掉两件事：管理员没法把
+        链接直接发给参与者，而参与者会以为自己拿到的链接是坏的。
+        """
+        _seed_event(
+            test_db,
+            "unlisted",
+            status=EventStatus.LIVE.value,
+            visibility=EventVisibility.INVISIBLE.value,
+        )
+
+        response = client.get(f"{PUBLIC}/unlisted")
+        assert response.status_code == 200
+        assert response.json()["event"]["id"] == "unlisted"
+
+    def test_public_events_are_listed_but_not_pinned(self, client, test_db) -> None:
+        """第 1 档必须有个落脚处，否则它和"不可公开"没有区别。"""
+        _seed_event(
+            test_db,
+            "plain",
+            status=EventStatus.LIVE.value,
+            visibility=EventVisibility.PUBLIC.value,
+        )
+
+        assert self._ids(client) == ["plain"]
+        assert client.get(f"{PUBLIC}/plain").json()["event"]["pinned"] is False
+
+    def test_pinned_events_sort_first(self, client, test_db) -> None:
+        _seed_event(test_db, "aaa", status=EventStatus.LIVE.value)
+        _seed_event(
+            test_db,
+            "zzz",
+            status=EventStatus.LIVE.value,
+            visibility=EventVisibility.PINNED.value,
+        )
+
+        # 按标识本该是 aaa 在前，置顶把它压了下去
+        assert self._ids(client) == ["zzz", "aaa"]
+        assert client.get(f"{PUBLIC}/zzz").json()["event"]["pinned"] is True
+
+    def test_public_response_exposes_pinned_not_the_code(self, client, test_db) -> None:
+        """公开响应给布尔而不是码值：拿到链接的访客不需要知道"这条是未公开的"。"""
+        _seed_event(
+            test_db,
+            "unlisted",
+            status=EventStatus.LIVE.value,
+            visibility=EventVisibility.INVISIBLE.value,
+        )
+        body = client.get(f"{PUBLIC}/unlisted").json()["event"]
+
+        assert "visibility" not in body
+        assert body["pinned"] is False
+
+    def test_existing_events_default_to_public(self, test_db) -> None:
+        # 加这个字段之前所有 live 活动都在目录里，默认成别的会让它们静默消失
+        _seed_event(test_db, "legacy", status=EventStatus.LIVE.value)
+        with test_db.session() as session:
+            assert session.get(Event, "legacy").visibility == EventVisibility.PUBLIC.value
+
+    def test_admin_can_create_an_invisible_event(self, admin_client) -> None:
+        response = _create(
+            admin_client, event_id="hidden", visibility=EventVisibility.INVISIBLE.value
+        )
+        assert response.status_code == 201
+        assert response.json()["event"]["visibility"] == EventVisibility.INVISIBLE.value
+
+    @pytest.mark.parametrize(
+        "code", [EventVisibility.INVISIBLE.value, EventVisibility.PUBLIC.value, EventVisibility.PINNED.value]
+    )
+    def test_admin_can_set_each_level(self, admin_client, test_db, code: int) -> None:
+        _seed_event(test_db, "live-one", status=EventStatus.LIVE.value)
+
+        body = admin_client.patch(
+            f"{ADMIN}/live-one", json={"visibility": code}
+        ).json()["event"]
+        assert body["visibility"] == code
+
+        # 0 不进目录，1 与 2 都进
+        expected = [] if code == 0 else ["live-one"]
+        assert self._ids(admin_client) == expected
+
+    def test_admin_list_still_shows_invisible_events(self, admin_client, test_db) -> None:
+        # 管理端当然要看得见，否则设成不可见之后就找不回来了
+        _seed_event(
+            test_db,
+            "unlisted",
+            status=EventStatus.LIVE.value,
+            visibility=EventVisibility.INVISIBLE.value,
+        )
+        body = admin_client.get(ADMIN).json()
+        assert [e["id"] for e in body["events"]] == ["unlisted"]
+
+    def test_invalid_visibility_is_rejected(self, admin_client, test_db) -> None:
+        _seed_event(test_db, "live-one")
+        response = admin_client.patch(f"{ADMIN}/live-one", json={"visibility": 99})
+        assert response.status_code == 422
+        assert "visibility" in response.json()["error"]["fields"]
+
+    def test_invalid_visibility_is_rejected_on_create(self, admin_client) -> None:
+        response = _create(admin_client, event_id="bad", visibility=99)
+        assert response.status_code == 422
+        assert "visibility" in response.json()["error"]["fields"]
+
+    def test_visibility_codes_are_the_agreed_numbers(self) -> None:
+        """码值是对外契约（列表、首页、补全都按它走），逐个钉住。"""
+        assert EventVisibility.INVISIBLE.value == 0
+        assert EventVisibility.PUBLIC.value == 1
+        assert EventVisibility.PINNED.value == 2
+        assert len(list(EventVisibility)) == 3
 
 
 class TestAdminAuthorization:

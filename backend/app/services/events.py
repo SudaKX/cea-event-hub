@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
 from app.core.config import Settings
-from app.core.enums import EventStatus
+from app.core.enums import EventStatus, EventVisibility
 from app.core.exceptions import Conflict, NotFound, ValidationFailed
 from app.core.text import entry_path_shape_error, event_id_shape_error
 from app.db.models import Event, User
@@ -72,6 +72,10 @@ class EventService:
     # ------------------------------------------------------------------
 
     def list_public(self, session: Session) -> list[Event]:
+        """公开目录。**不可见（0）的活动不在其中**，但按标识仍可直接打开。
+
+        含"公开（1）"与"公开并置顶（2）"两档，置顶的排在前面。
+        """
         return list(
             session.scalars(
                 self.repo.list_public(session, status=EventStatus.LIVE.value)
@@ -82,6 +86,9 @@ class EventService:
         """只返回 live 活动。
 
         对未发布的活动返回 404 而不是 403：后者会泄露"这个标识存在但还没上线"。
+
+        **不可见的活动在这里照常放行** —— 它只是不出现在公开面。可见性不是访问
+        控制：标识本身就是那条链接，管理员把它发给谁，谁就能打开。
         """
         event = self.repo.get(session, event_id)
         if event is None or event.status != EventStatus.LIVE.value:
@@ -104,6 +111,7 @@ class EventService:
         submissions_open_at=None,
         submissions_close_at=None,
         max_submissions: int | None = None,
+        visibility: str | None = None,
         owner: User | None = None,
     ) -> Event:
         normalized_id = (event_id or "").strip()
@@ -119,6 +127,9 @@ class EventService:
         if fields:
             raise ValidationFailed(fields=fields)
 
+        if visibility is not None and visibility not in {v.value for v in EventVisibility}:
+            raise ValidationFailed(fields={"visibility": "可见性取值不合法"})
+
         if self.repo.get(session, normalized_id) is not None:
             raise Conflict("该活动标识已被占用")
 
@@ -127,6 +138,12 @@ class EventService:
             title=title.strip(),
             summary=summary,
             status=EventStatus.DRAFT.value,
+            # 不给就按"公开"建：与加这个字段之前的行为一致。
+            # **不能写 `visibility or PUBLIC`** —— 码值 0（不公开）是合法取值，
+            # 用 or 兜底会把它悄悄换成 1，于是"不公开"永远设不上。
+            visibility=(
+                EventVisibility.PUBLIC.value if visibility is None else visibility
+            ),
             entry_path=path,
             content_version=0,
             submission_count=0,
@@ -164,6 +181,11 @@ class EventService:
             status_value = str(changes["status"])
             if status_value not in {s.value for s in EventStatus}:
                 raise ValidationFailed(fields={"status": "状态取值不合法"})
+
+        if "visibility" in changes:
+            # 码值是整数，别 stringify —— `str(1)` 会变成 "1"，与枚举值比不相等
+            if changes["visibility"] not in {v.value for v in EventVisibility}:
+                raise ValidationFailed(fields={"visibility": "可见性取值不合法"})
 
         if (
             changes.get("submissions_open_at")

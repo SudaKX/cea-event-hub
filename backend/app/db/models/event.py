@@ -9,7 +9,7 @@ from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.clock import utcnow
-from app.core.enums import EventStatus
+from app.core.enums import EventStatus, EventVisibility
 from app.db.base import Base
 from app.db.types import UtcDateTime
 
@@ -26,6 +26,11 @@ class Event(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default=EventStatus.DRAFT.value, index=True
+    )
+    # 在公开面露多少。与 status 正交：status 管能不能访问，visibility 管在公开面
+    # 出现到什么程度（见 EventVisibility）。默认 PUBLIC，与加这个字段之前一致
+    visibility: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=EventVisibility.PUBLIC.value, index=True
     )
 
     # 活动内容入口页，相对于 /content/{event_id}/
