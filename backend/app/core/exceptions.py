@@ -159,6 +159,21 @@ class QuotaExhausted(DomainError):
     message = "该活动名额已满"
 
 
+class SubmitterQuotaExhausted(DomainError):
+    """这个提交者在当前活动下已达份数上限。
+
+    与 `QuotaExhausted` 分开成两个码，因为**可采取的行动完全不同**：活动满额是
+    "整个活动没位置了"，而个人满额是"你不能再交了，但别人还可以"。合成一个会让
+    活动页没法给出准确的提示。
+
+    同样是 409：对这个人来说也是终态，重试多少次都一样。
+    """
+
+    code = "submitter_quota_exhausted"
+    status_code = 409
+    message = "你在该活动下已达到提交份数上限"
+
+
 class LastAdminProtected(DomainError):
     code = "last_admin_protected"
     status_code = 409
@@ -214,6 +229,7 @@ __all__ = [
     "NotFound",
     "PayloadTooLarge",
     "QuotaExhausted",
+    "SubmitterQuotaExhausted",
     "RateLimited",
     "StorageError",
     "TokenInvalid",

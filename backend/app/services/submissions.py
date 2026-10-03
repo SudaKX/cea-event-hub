@@ -32,6 +32,7 @@ from app.core.exceptions import (
     LoginRequired,
     PayloadTooLarge,
     QuotaExhausted,
+    SubmitterQuotaExhausted,
     ValidationFailed,
 )
 from app.core.ports import FileStorage
@@ -43,10 +44,15 @@ from app.repositories.events import EventRepository
 from app.repositories.submissions import (
     SubmissionFileRepository,
     SubmissionRepository,
+    SubmitterQuotaRepository,
 )
 from app.services.events import EventService
 
 logger = logging.getLogger(__name__)
+
+#: 没设个人上限时计数器的"上限"。计数器仍要往前走，所以给一个大到不会被撞到的
+#: 值，而不是给 0 或跳过维护 —— 见 SubmitterQuota 的说明。
+_UNLIMITED_SUBMITTER_QUOTA = 2**31 - 1
 
 
 @dataclass(frozen=True)
@@ -73,6 +79,7 @@ class SubmissionService:
         event_repo: EventRepository | None = None,
         submission_repo: SubmissionRepository | None = None,
         file_repo: SubmissionFileRepository | None = None,
+        submitter_quota_repo: SubmitterQuotaRepository | None = None,
         event_service: EventService | None = None,
     ) -> None:
         self.settings = settings
@@ -80,6 +87,7 @@ class SubmissionService:
         self.events = event_repo or EventRepository()
         self.submissions = submission_repo or SubmissionRepository()
         self.files = file_repo or SubmissionFileRepository()
+        self.submitter_quotas = submitter_quota_repo or SubmitterQuotaRepository()
         self.event_service = event_service or EventService(settings, self.events)
 
     # ------------------------------------------------------------------
@@ -168,7 +176,7 @@ class SubmissionService:
                 return SubmissionResult(existing, deduplicated=True)
 
         # ---- 配额（单语句 CAS，与后面的插入同事务）----
-        self._acquire_quota(session, event)
+        self._acquire_quota(session, event, submitter)
 
         # 落盘与落库无法组成一个事务，因此：先写字节，再落库，
         # **任何后续失败都要把已写的字节删掉**。只在"写文件那一步失败"时清理
@@ -240,14 +248,32 @@ class SubmissionService:
                 fields={"files": f"单次最多上传 {self.settings.MAX_FILES_PER_REQUEST} 个文件"}
             )
 
-    def _acquire_quota(self, session: Session, event: Event) -> None:
+    def _acquire_quota(self, session: Session, event: Event, submitter: str) -> None:
+        """占用活动名额与提交者名额。
+
+        顺序是**先活动、后个人**：活动满额是最常见的拒绝原因，先检查它能省掉一次
+        写。两者在同一事务内，任一失败都会整体回滚，所以先查哪个都不影响正确性。
+        """
         limit = self.event_service.effective_quota_limit(event)
         if limit is None:
             # 不限额时仍然计数，供管理端展示已收条数
             self.events.increment_submission_count(session, event.id)
-            return
-        if not self.events.try_acquire_submission_slot(session, event.id, limit=limit):
+        elif not self.events.try_acquire_submission_slot(
+            session, event.id, limit=limit
+        ):
             raise QuotaExhausted()
+
+        # 计数器**无论有没有设上限都要维护**：这样以后才设上限时不必再回填一次，
+        # 也不会出现"设上限之前交的那些不算数"
+        per_submitter = event.max_per_submitter
+        if per_submitter is None:
+            self.submitter_quotas.try_acquire(
+                session, event.id, submitter, limit=_UNLIMITED_SUBMITTER_QUOTA
+            )
+        elif not self.submitter_quotas.try_acquire(
+            session, event.id, submitter, limit=per_submitter
+        ):
+            raise SubmitterQuotaExhausted()
 
     def _store_files(
         self, event_id: str, kind: str, uploads: Sequence[Upload]
@@ -417,14 +443,16 @@ class SubmissionService:
             )
 
         self.events.release_submission_slot(session, event_id)
+        # 个人计数器同样要退：不退的话管理员删掉一条也救不回那个人
+        self.submitter_quotas.release(session, event_id, submission.submitter)
         session.delete(submission)
         return submission
 
     def delete_many(self, session: Session, *, submission_ids: Sequence[int]) -> int:
         """批量删除。
 
-        这是罕见路径，因此删完直接按实际行数**重算**该活动的计数，而不是逐条
-        递减——重算顺便成为计数器唯一需要的自愈入口。
+        这是罕见路径，因此删完直接按实际行数**重算**该活动的计数与涉及到的每个
+        提交者的份数，而不是逐条递减——重算顺便成为计数器唯一需要的自愈入口。
         """
         from app.core.deps import register_after_commit
 
@@ -432,6 +460,7 @@ class SubmissionService:
             return 0
 
         touched_events: set[str] = set()
+        touched_submitters: set[tuple[str, str]] = set()
         deleted = 0
 
         for submission_id in submission_ids:
@@ -439,6 +468,7 @@ class SubmissionService:
             if submission is None:
                 continue
             touched_events.add(submission.event_id)
+            touched_submitters.add((submission.event_id, submission.submitter))
             for record in self.files.list_for_submission(session, submission_id):
                 register_after_commit(
                     session,
@@ -452,6 +482,8 @@ class SubmissionService:
         session.flush()
         for event_id in touched_events:
             self.events.recompute_submission_count(session, event_id)
+        for event_id, submitter in touched_submitters:
+            self.submitter_quotas.recompute(session, event_id, submitter)
         return deleted
 
     def attachment_mime(self, record: SubmissionFile) -> str:

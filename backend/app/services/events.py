@@ -111,6 +111,7 @@ class EventService:
         submissions_open_at=None,
         submissions_close_at=None,
         max_submissions: int | None = None,
+        max_per_submitter: int | None = None,
         visibility: str | None = None,
         owner: User | None = None,
     ) -> Event:
@@ -157,6 +158,7 @@ class EventService:
             submissions_open_at=submissions_open_at,
             submissions_close_at=submissions_close_at,
             max_submissions=max_submissions,
+            max_per_submitter=max_per_submitter,
         )
         self.repo.add(session, event)
         return event

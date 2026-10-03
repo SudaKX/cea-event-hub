@@ -6,18 +6,26 @@ import io
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.core.clock import utcnow
 from app.core.config import settings as global_settings
 from app.core.enums import EventStatus, StorageState, SubmissionStatus
 from app.core.security import hash_ip
-from app.db.models import Event, Submission, SubmissionFile, UserSession
+from app.db.models import (
+    Event,
+    Submission,
+    SubmissionFile,
+    SubmitterQuota,
+    UserSession,
+)
 from app.infra.storage_local import LocalDiskStorage
 from app.services.janitor import Janitor
 
 API = "/api/v1"
 ADMIN = f"{API}/admin/events"
+#: 提交的管理端路径与活动的不同前缀，别用 ADMIN 拼
+ADMIN_SUBMISSIONS = f"{API}/admin/submissions"
 
 
 @pytest.fixture
@@ -609,6 +617,218 @@ class TestQuota:
     def test_zero_quota_blocks_everyone(self, client, test_db) -> None:
         _seed_event(test_db, max_submissions=0)
         assert _submit(client).status_code == 409
+
+
+class TestSubmitterQuota:
+    """单个提交者的份数上限。
+
+    计数器存在的理由是**原子性**：读一下再写在 MySQL 的可重复读下会静默超限。
+    因此这一组除了功能，还要盯住"计数与实际行数一致"。
+    """
+
+    def _counts(self, test_db, event_id: str = "spring-2026") -> dict[str, int]:
+        with test_db.session() as session:
+            return {
+                row.submitter: row.used
+                for row in session.scalars(
+                    select(SubmitterQuota).where(SubmitterQuota.event_id == event_id)
+                )
+            }
+
+    def test_allows_up_to_the_per_submitter_limit(self, client, test_db) -> None:
+        _seed_event(test_db, max_per_submitter=2)
+
+        assert _submit(client, {"n": 1}).status_code == 201
+        assert _submit(client, {"n": 2}).status_code == 201
+
+        response = _submit(client, {"n": 3})
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "submitter_quota_exhausted"
+
+    def test_other_submitters_are_unaffected(self, client, test_db) -> None:
+        """这是它与活动满额必须分开成两个错误码的理由。
+
+        活动满额是"整个活动没位置了"，个人满额是"你不能再交了，别人还可以" ——
+        活动页据此给出的提示完全不同。
+        """
+        _seed_event(test_db, max_per_submitter=1)
+
+        assert _submit(client, {"n": 1}, client_id="alice").status_code == 201
+        assert _submit(client, {"n": 2}, client_id="alice").status_code == 409
+        assert _submit(client, {"n": 3}, client_id="bob").status_code == 201
+
+    def test_unlimited_event_still_maintains_the_counter(self, client, test_db) -> None:
+        """不限额也要维护计数。
+
+        否则"以后才设上限"就得再回填一次，还会出现"设上限之前交的那些不算数"。
+        """
+        _seed_event(test_db)  # 不设 max_per_submitter
+
+        for index in range(3):
+            assert _submit(client, {"n": index}, client_id="alice").status_code == 201
+
+        assert self._counts(test_db) == {"a:alice": 3}
+
+    def test_setting_a_limit_later_counts_existing_rows(self, test_db) -> None:
+        """**这是回填存在的理由。**
+
+        计数器在功能上线时按既有提交回填。不回填的话，管理员把活动设成"每人最多
+        1 份"、而某人此前已交过 3 份时，计数器里没有他的行，下一次提交会走
+        "行不存在 → 插入 used=1"这条路直接成功，超限静默通过。
+        """
+        _seed_event(test_db)
+        with test_db.session() as session:
+            for index in range(3):
+                session.add(
+                    Submission(
+                        event_id="spring-2026",
+                        submitter="a:alice",
+                        payload={"n": index},
+                    )
+                )
+
+        from app.db.models import SubmitterQuota as Quota
+        from app.repositories.submissions import SubmitterQuotaRepository
+
+        # 模拟迁移的回填：按实际行数建立计数
+        with test_db.session() as session:
+            session.execute(
+                text(
+                    "INSERT INTO submitter_quotas (event_id, submitter, used) "
+                    "SELECT event_id, submitter, COUNT(*) FROM submissions "
+                    "GROUP BY event_id, submitter"
+                )
+            )
+
+        assert self._counts(test_db) == {"a:alice": 3}
+        with test_db.session() as session:
+            assert not SubmitterQuotaRepository().try_acquire(
+                session, "spring-2026", "a:alice", limit=3
+            )
+            assert session.get(Quota, ("spring-2026", "a:alice")).used == 3
+
+    def test_deleting_a_submission_frees_the_slot(self, admin_client, client, test_db) -> None:
+        """删一条要退还个人名额 —— 否则管理员救不回那个人。"""
+        _seed_event(test_db, max_per_submitter=1)
+
+        first = _submit(client, {"n": 1}, client_id="alice")
+        assert first.status_code == 201
+        assert _submit(client, {"n": 2}, client_id="alice").status_code == 409
+
+        submission_id = first.json()["submission"]["id"]
+        assert admin_client.delete(f"{ADMIN_SUBMISSIONS}/{submission_id}").status_code == 204
+
+        assert _submit(client, {"n": 3}, client_id="alice").status_code == 201
+
+    def test_batch_delete_recomputes_the_counter(self, admin_client, client, test_db) -> None:
+        _seed_event(test_db, max_per_submitter=5)
+
+        ids = []
+        for index in range(3):
+            response = _submit(client, {"n": index}, client_id="alice")
+            ids.append(response.json()["submission"]["id"])
+        assert self._counts(test_db) == {"a:alice": 3}
+
+        response = admin_client.post(f"{ADMIN_SUBMISSIONS}:delete", json={"ids": ids})
+        assert response.status_code == 200
+
+        assert self._counts(test_db) == {"a:alice": 0}
+        # 名额确实回来了
+        assert _submit(client, {"n": 9}, client_id="alice").status_code == 201
+
+    def test_idempotent_replay_does_not_consume_a_slot(self, client, test_db) -> None:
+        """幂等命中直接返回原提交，不该再占一份。
+
+        幂等键走 `Idempotency-Key` 请求头；重放返回 **201**（不是 200），靠
+        `deduplicated` 区分。
+        """
+        _seed_event(test_db, max_per_submitter=1)
+        url = f"{API}/events/spring-2026/submissions"
+        params = {"client_id": "alice"}
+        headers = {"Idempotency-Key": "k1"}
+
+        first = client.post(url, json={"n": 1}, params=params, headers=headers)
+        assert first.status_code == 201
+
+        # 同键重放：应当原样返回，而不是撞上个人上限
+        replay = client.post(url, json={"n": 1}, params=params, headers=headers)
+        assert replay.status_code == 201
+        assert replay.json()["deduplicated"] is True
+        assert replay.json()["submission"]["id"] == first.json()["submission"]["id"]
+
+        # 计数仍是 1：那次重放没有偷偷占掉第二份，也没有把第一份退掉
+        assert self._counts(test_db) == {"a:alice": 1}
+        # 不带幂等键就是新的一次提交，被个人上限挡下
+        assert client.post(url, json={"n": 2}, params=params).status_code == 409
+
+    def test_failed_submission_rolls_back_the_counter(
+        self, fault_client, test_db, monkeypatch
+    ) -> None:
+        from app.repositories.submissions import SubmissionRepository
+
+        _seed_event(test_db, max_per_submitter=3)
+
+        def boom(self, session, submission):
+            raise RuntimeError("模拟落库失败")
+
+        monkeypatch.setattr(SubmissionRepository, "add", boom)
+        assert _submit(fault_client, {"n": 1}, client_id="alice").status_code == 500
+
+        assert self._counts(test_db) == {}
+
+    def test_counter_stays_in_step_with_actual_rows(self, client, test_db) -> None:
+        """计数与真实行数必须一致 —— 它是从行数派生出来的，长期偏离就成了假数据。"""
+        _seed_event(test_db, max_per_submitter=10)
+
+        for index in range(4):
+            assert _submit(client, {"n": index}, client_id="alice").status_code == 201
+
+        with test_db.session() as session:
+            actual = session.scalar(
+                select(func.count())
+                .select_from(Submission)
+                .where(Submission.submitter == "a:alice")
+            )
+        assert self._counts(test_db) == {"a:alice": actual}
+
+    def test_requires_login_event_scopes_the_limit_per_user(self, user_client, test_db) -> None:
+        """需登录时提交者是可信的 `u:{user_id}`，限额因此真正生效。"""
+        _seed_event(test_db, submission_requires_login=True, max_per_submitter=1)
+
+        assert _submit(user_client, {"n": 1}).status_code == 201
+        assert _submit(user_client, {"n": 2}).status_code == 409
+        assert self._counts(test_db) == {"u:1": 1}
+
+    def test_zero_is_rejected_by_the_schema(self, admin_client, test_db) -> None:
+        """上限 0 等于谁都交不了，那应当通过把活动下架表达，而不是一个隐晦的配额。"""
+        _seed_event(test_db)
+        response = admin_client.patch(
+            f"{ADMIN}/spring-2026", json={"max_per_submitter": 0}
+        )
+        assert response.status_code == 422
+
+    def test_admin_can_set_and_clear_the_limit(self, admin_client, test_db) -> None:
+        _seed_event(test_db)
+
+        assert admin_client.patch(
+            f"{ADMIN}/spring-2026", json={"max_per_submitter": 3}
+        ).json()["event"]["max_per_submitter"] == 3
+        assert admin_client.patch(
+            f"{ADMIN}/spring-2026", json={"max_per_submitter": None}
+        ).json()["event"]["max_per_submitter"] is None
+
+    def test_anonymous_limit_is_only_advice(self, client, test_db) -> None:
+        """**写清楚这条限制的边界，免得有人以为它是硬限制。**
+
+        匿名提交者的标识是客户端自报的 `client_id`，换一个就是一个新的提交者 ——
+        限额防的是误操作，不是故意绕过。要真正限制，得让活动要求登录。
+        """
+        _seed_event(test_db, max_per_submitter=1)
+
+        assert _submit(client, {"n": 1}, client_id="alice").status_code == 201
+        assert _submit(client, {"n": 2}, client_id="alice").status_code == 409
+        # 换一个 client_id 就绕过了 —— 这是设计上接受的，不是缺陷
+        assert _submit(client, {"n": 3}, client_id="alice-in-another-browser").status_code == 201
 
 
 class TestJanitor:

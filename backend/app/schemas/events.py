@@ -51,6 +51,7 @@ class EventAdmin(EventPublic):
 
     visibility: int
     max_submissions: int | None = None
+    max_per_submitter: int | None = None
     owner_id: int | None = None
     created_at: datetime
     updated_at: datetime
@@ -68,6 +69,9 @@ class EventCreateRequest(BaseModel):
     submissions_open_at: datetime | None = None
     submissions_close_at: datetime | None = None
     max_submissions: int | None = Field(default=None, ge=0)
+    #: 单个提交者最多几份；不给或给 null 表示不限。下限 1：给 0 等于谁都交不了，
+    #: 那应当通过把活动下架来表达，而不是用一个隐晦的配额
+    max_per_submitter: int | None = Field(default=None, ge=1)
     #: 可见性码值 0/1/2，不给则按 1（公开）建
     visibility: int | None = None
 
@@ -90,6 +94,7 @@ class EventUpdateRequest(BaseModel):
     submissions_open_at: datetime | None = None
     submissions_close_at: datetime | None = None
     max_submissions: int | None = Field(default=None, ge=0)
+    max_per_submitter: int | None = Field(default=None, ge=1)
     theme: dict[str, Any] | None = None
 
 
@@ -130,6 +135,7 @@ def to_admin(event: Event, quota: QuotaState) -> EventAdmin:
         **to_public(event, quota).model_dump(),
         visibility=event.visibility,
         max_submissions=event.max_submissions,
+        max_per_submitter=event.max_per_submitter,
         owner_id=event.owner_id,
         created_at=event.created_at,
         updated_at=event.updated_at,

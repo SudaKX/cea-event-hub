@@ -58,6 +58,14 @@ class Event(Base):
     # 覆盖默认条数上限；为空时按 submission_requires_login 取全局默认
     max_submissions: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # 单个提交者最多能交几份；为空表示不限。
+    #
+    # **对匿名提交，这条限制防不住故意绕过**：匿名提交者的标识是客户端自报的
+    # `a:{client_id}`，换一个浏览器就是一个新的提交者。要真正限制，得把活动设成
+    # `submission_requires_login`，让标识落到可信的 `u:{user_id}` 上。管理界面
+    # 有相应提示 —— 不写清楚的话，管理员会以为它是个硬限制。
+    max_per_submitter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # 配额计数器：由单语句 CAS 维护（design.md 决策 9）。
     # 单条删除必须在同一事务内递减，否则管理员失去"删一条腾一个名额"这条后路。
     submission_count: Mapped[int] = mapped_column(

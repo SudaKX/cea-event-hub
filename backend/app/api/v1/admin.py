@@ -129,6 +129,7 @@ def create_event(
         submissions_open_at=payload.submissions_open_at,
         submissions_close_at=payload.submissions_close_at,
         max_submissions=payload.max_submissions,
+        max_per_submitter=payload.max_per_submitter,
         visibility=payload.visibility,
         owner=admin,
     )

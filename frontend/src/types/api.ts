@@ -53,6 +53,13 @@ export interface EventAdmin extends EventPublic {
    */
   visibility: number
   max_submissions: number | null
+  /**
+   * 单个提交者最多几份；`null` 表示不限。
+   *
+   * **对匿名提交，这条限制防不住故意绕过**：匿名提交者的标识是客户端自报的
+   * `client_id`，换一个浏览器就是新的提交者。要真正限制，得让活动要求登录。
+   */
+  max_per_submitter: number | null
   owner_id: number | null
   created_at: string
   updated_at: string

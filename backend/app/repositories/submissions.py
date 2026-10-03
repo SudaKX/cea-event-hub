@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import Select, String, cast, delete, func, select
+from sqlalchemy import Select, String, cast, delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import Submission, SubmissionFile
+from app.db.models import Submission, SubmissionFile, SubmitterQuota
 
 #: LIKE 的转义符。反斜杠是 SQL 的惯例，SQLite 与 MySQL 都认。
 _LIKE_ESCAPE = "\\"
@@ -25,6 +26,114 @@ def escape_like(term: str) -> str:
         .replace("%", f"{_LIKE_ESCAPE}%")
         .replace("_", f"{_LIKE_ESCAPE}_")
     )
+
+
+class SubmitterQuotaRepository:
+    """单个提交者的份数计数器。
+
+    与 `EventRepository` 的配额段同一套理由：**用单语句 CAS 而不是"数一下再写"**。
+    数一下再写在 SQLite 上会因快照冲突报错（安全但难看），在 MySQL 的可重复读下
+    则两个并发请求各自数到 0、双双插入，**静默超限**。CAS 在一条语句内完成判断与
+    写入，任何隔离级别、任何数据库都成立，迁移面上少一个接缝。
+
+    用 rowcount 而不是 RETURNING：MySQL 不支持 RETURNING。这里的
+    `used = used + 1` 必然改变列值，所以 MySQL 的 rowcount"匹配行数 vs 改变行数"
+    差异不会咬到我们。
+    """
+
+    def try_acquire(
+        self, session: Session, event_id: str, submitter: str, *, limit: int
+    ) -> bool:
+        """占用这个提交者的一个份数。返回 False 表示已达上限。
+
+        两步：先试更新既有行；更新不到再试插入。**插入撞唯一键是有意义的信号**
+        ——它说明行是刚刚被并发的另一个请求建出来的，此时应当退回 CAS 重试，而
+        不是直接放行。
+        """
+        if self._increment(session, event_id, submitter, limit=limit):
+            return True
+
+        # 更新不到有两种可能：行不存在，或行已满。用插入来区分。
+        try:
+            with session.begin_nested():
+                session.add(
+                    SubmitterQuota(event_id=event_id, submitter=submitter, used=1)
+                )
+        except IntegrityError:
+            # 行已存在（并发的另一个请求刚建出来），退回 CAS 重试一次
+            return self._increment(session, event_id, submitter, limit=limit)
+        return True
+
+    def _increment(
+        self, session: Session, event_id: str, submitter: str, *, limit: int
+    ) -> bool:
+        result = session.execute(
+            update(SubmitterQuota)
+            .where(
+                SubmitterQuota.event_id == event_id,
+                SubmitterQuota.submitter == submitter,
+                SubmitterQuota.used < limit,
+            )
+            .values(used=SubmitterQuota.used + 1)
+        )
+        return bool(result.rowcount)
+
+    def count_for(
+        self, session: Session, event_id: str, submitter: str
+    ) -> int:
+        return (
+            session.scalar(
+                select(SubmitterQuota.used).where(
+                    SubmitterQuota.event_id == event_id,
+                    SubmitterQuota.submitter == submitter,
+                )
+            )
+            or 0
+        )
+
+    def release(self, session: Session, event_id: str, submitter: str) -> None:
+        """退还一份。
+
+        与删除同一事务：不退还的话，管理员删掉一条也救不回那个人 —— 与活动级
+        配额"删一条腾一个名额"是同一条后路。下限钳到 0，避免数据异常时出现负数。
+        """
+        session.execute(
+            update(SubmitterQuota)
+            .where(
+                SubmitterQuota.event_id == event_id,
+                SubmitterQuota.submitter == submitter,
+                SubmitterQuota.used > 0,
+            )
+            .values(used=SubmitterQuota.used - 1)
+        )
+
+    def recompute(
+        self, session: Session, event_id: str, submitter: str
+    ) -> int:
+        """按实际行数重算某个提交者的份数。
+
+        批量删除等罕见路径调用；也是这个计数器唯一需要的自愈入口。
+        """
+        actual = (
+            session.scalar(
+                select(func.count())
+                .select_from(Submission)
+                .where(
+                    Submission.event_id == event_id,
+                    Submission.submitter == submitter,
+                )
+            )
+            or 0
+        )
+        existing = session.get(SubmitterQuota, (event_id, submitter))
+        if existing is None:
+            if actual:
+                session.add(
+                    SubmitterQuota(event_id=event_id, submitter=submitter, used=actual)
+                )
+            return actual
+        existing.used = actual
+        return actual
 
 
 class SubmissionRepository:

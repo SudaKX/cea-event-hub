@@ -687,6 +687,8 @@ describe('错误码映射（任务 13.9）', () => {
       ['login_required', BRIDGE_ERROR.LOGIN_REQUIRED],
       ['event_closed', BRIDGE_ERROR.EVENT_CLOSED],
       ['quota_exhausted', BRIDGE_ERROR.QUOTA_EXHAUSTED],
+      // 个人满额与活动满额分成两个码：可采取的行动完全不同
+      ['submitter_quota_exhausted', BRIDGE_ERROR.SUBMITTER_QUOTA_EXHAUSTED],
       ['rate_limited', BRIDGE_ERROR.RATE_LIMITED],
       ['validation_failed', BRIDGE_ERROR.VALIDATION_FAILED],
     ]

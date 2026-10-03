@@ -29,6 +29,8 @@ const draft = ref({
   summary: '',
   submission_requires_login: false,
   max_submissions: '' as string,
+  /** 单个提交者最多几份；留空 = 不限 */
+  max_per_submitter: '' as string,
   // 默认公开：与加这个字段之前的行为一致
   visibility: String(EVENT_VISIBILITY.PUBLIC),
 })
@@ -57,6 +59,11 @@ async function onCreate(): Promise<void> {
       submission_requires_login: draft.value.submission_requires_login,
       // 空串表示"不限额"，不传该字段即走默认
       max_submissions: draft.value.max_submissions === '' ? undefined : Number(draft.value.max_submissions),
+      // 同理，空串 = 不限。**不能写 Number('')** —— 那是 0，而下限是 1
+      max_per_submitter:
+        draft.value.max_per_submitter === ''
+          ? undefined
+          : Number(draft.value.max_per_submitter),
       visibility: parseVisibility(draft.value.visibility),
     })
     showCreate.value = false
@@ -66,6 +73,7 @@ async function onCreate(): Promise<void> {
       summary: '',
       submission_requires_login: false,
       max_submissions: '',
+      max_per_submitter: '',
       visibility: String(EVENT_VISIBILITY.PUBLIC),
     }
     await load()
@@ -161,7 +169,18 @@ onMounted(load)
           <span class="field__label">条数上限<span class="dim">（留空取默认）</span></span>
           <input v-model="draft.max_submissions" type="number" min="0" placeholder="4096" />
         </label>
+
+        <label class="field">
+          <span class="field__label">每人最多<span class="dim">（留空不限）</span></span>
+          <input v-model="draft.max_per_submitter" type="number" min="1" placeholder="1" />
+        </label>
       </div>
+
+      <!-- 限制的边界要写在界面上，否则管理员会以为它是硬限制 -->
+      <p class="dim note">
+        「每人最多」对<strong>匿名</strong>活动只能防误操作：匿名提交者的身份由
+        客户端自报，换一个浏览器即可绕过。要真正限制，请勾选上面的"提交需要登录"。
+      </p>
 
       <button class="btn btn--primary" type="submit" :disabled="busy">
         {{ busy ? '创建中…' : '创建' }}
@@ -180,6 +199,7 @@ onMounted(load)
             <th>可见性</th>
             <th>提交</th>
             <th>配额</th>
+            <th>每人</th>
             <th>内容版本</th>
           </tr>
         </thead>
@@ -199,6 +219,7 @@ onMounted(load)
             </td>
             <td class="num">{{ event.submission_requires_login ? '需登录' : '可匿名' }}</td>
             <td class="num">{{ quotaText(event) }}</td>
+            <td class="num">{{ event.max_per_submitter ?? '不限' }}</td>
             <td class="num">v{{ event.content_version }}</td>
           </tr>
         </tbody>
@@ -217,6 +238,16 @@ onMounted(load)
 
 .head__title {
   font-size: 20px;
+}
+
+.note {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+.note strong {
+  color: var(--bone);
 }
 
 .head__lead {

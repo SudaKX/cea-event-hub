@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND = REPO_ROOT / "backend"
 
 #: 一条链上包含批处理 ALTER 的关键版本。逐个升过去，每一步都查数据还在不在。
-BATCH_STEPS = ["8d54ac924e60", "9f1c2a4b7e03"]
+BATCH_STEPS = ["8d54ac924e60", "9f1c2a4b7e03", "afbd98e64a5e"]
 
 
 def _config(database: Path) -> Config:

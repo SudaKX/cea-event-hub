@@ -103,6 +103,34 @@ class Submission(Base):
         return f"<Submission id={self.id} event={self.event_id!r} submitter={self.submitter!r}>"
 
 
+class SubmitterQuota(Base):
+    """单个提交者在一个活动下已占用的份数。
+
+    存在的理由是**原子性**，不是性能。"这个人交过几份"完全可以从 submissions
+    表数出来，但那是读一下再写：在 MySQL 的可重复读下，两个并发请求会各自数到
+    0，然后双双插入，**静默超限**。这里放一个能被单语句 CAS 更新的计数器，与
+    活动级配额同一套理由（见 EventRepository 的配额段）。
+
+    计数器**无论活动有没有设上限都要维护**：这样管理员以后才设上限时不必再回填
+    一次，也不会出现"设上限之前交的那些不算数"。
+
+    没有独立主键：`(event_id, submitter)` 本身就是唯一键，再给一个自增 id 只会
+    多一个没人用的索引。
+    """
+
+    __tablename__ = "submitter_quotas"
+
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), primary_key=True
+    )
+    # 形态与 submissions.submitter 一致：u:{user_id} / a:{client_id}
+    submitter: Mapped[str] = mapped_column(String(80), primary_key=True)
+    used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<SubmitterQuota {self.event_id} {self.submitter}={self.used}>"
+
+
 class SubmissionFile(Base):
     __tablename__ = "submission_files"
 

@@ -121,13 +121,20 @@ export const ALLOWED_OPS: readonly string[] = Object.values(BRIDGE_OP)
  * 活动页可区分的错误码。
  *
  * 活动页**不需要解析 HTTP 状态码**：宿主把后端错误映射成这里的取值。
- * 其中 `quota_exhausted` 与 `event_closed` 是终态，`rate_limited` 是唯一
- * 值得重试的。
+ * 其中 `quota_exhausted`、`submitter_quota_exhausted` 与 `event_closed` 是终态，
+ * `rate_limited` 是唯一值得重试的。
  */
 export const BRIDGE_ERROR = {
   LOGIN_REQUIRED: 'login_required',
   EVENT_CLOSED: 'event_closed',
+  /** 整个活动满额 */
   QUOTA_EXHAUSTED: 'quota_exhausted',
+  /**
+   * 这个提交者自己满额。与 `QUOTA_EXHAUSTED` 分开，因为可采取的行动完全不同：
+   * 前者是"活动没位置了"，后者是"你不能再交了，别人还可以" —— 活动页据此给出
+   * 的提示也该不同。
+   */
+  SUBMITTER_QUOTA_EXHAUSTED: 'submitter_quota_exhausted',
   RATE_LIMITED: 'rate_limited',
   VALIDATION_FAILED: 'validation_failed',
   NOT_FOUND: 'not_found',

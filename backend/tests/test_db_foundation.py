@@ -36,7 +36,7 @@ class TestNamingConvention:
         # 六个表都应有主键，外键与唯一约束若干；防止断言在空集合上"通过"
         assert checked >= 15, f"只检查到 {checked} 个约束，元数据可能没加载全"
 
-    def test_all_six_tables_are_registered(self) -> None:
+    def test_all_tables_are_registered(self) -> None:
         assert set(Base.metadata.tables) == {
             "users",
             "sessions",
@@ -44,6 +44,9 @@ class TestNamingConvention:
             "events",
             "submissions",
             "submission_files",
+            # 单个提交者的份数计数器。它存在的理由是**原子性**（单语句 CAS），
+            # 不是性能 —— 详见模型上的说明
+            "submitter_quotas",
         }
 
     def test_index_names_are_conventional(self) -> None:

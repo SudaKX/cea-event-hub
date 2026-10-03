@@ -39,6 +39,8 @@ export interface EventCreatePayload {
   submissions_open_at?: string | null
   submissions_close_at?: string | null
   max_submissions?: number | null
+  /** 单个提交者最多几份；不传或 null 表示不限。下限 1 */
+  max_per_submitter?: number | null
   /** 可见性码值 0/1/2，取值见 @/domain/event */
   visibility?: number
 }

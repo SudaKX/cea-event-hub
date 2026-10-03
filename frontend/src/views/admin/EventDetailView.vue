@@ -36,6 +36,7 @@ const form = ref({
   visibility: String(EVENT_VISIBILITY.PUBLIC),
   submission_requires_login: false,
   max_submissions: '' as string,
+  max_per_submitter: '' as string,
 })
 
 const quotaText = computed(() => {
@@ -65,6 +66,8 @@ async function loadDetail(): Promise<void> {
     visibility: String(detail.visibility),
     submission_requires_login: detail.submission_requires_login,
     max_submissions: detail.max_submissions === null ? '' : String(detail.max_submissions),
+    max_per_submitter:
+      detail.max_per_submitter === null ? '' : String(detail.max_per_submitter),
   }
 }
 
@@ -91,6 +94,11 @@ async function onSave(): Promise<void> {
       visibility: parseVisibility(form.value.visibility),
       submission_requires_login: form.value.submission_requires_login,
       max_submissions: form.value.max_submissions === '' ? null : Number(form.value.max_submissions),
+      // 留空 = 不限制。**不能写 Number('')** —— 那是 0，而下限是 1，会被后端拒绝
+      max_per_submitter:
+        form.value.max_per_submitter === ''
+          ? null
+          : Number(form.value.max_per_submitter),
     })
     notice.value = '已保存'
   } catch (caught) {
@@ -195,6 +203,26 @@ watch(() => props.eventId, load)
             <input v-model="form.max_submissions" type="number" min="0" />
             <span class="field__hint dim">当前：{{ quotaText }}</span>
           </label>
+
+          <label class="field">
+            <span class="field__label">
+              每人最多<span class="dim">（留空不限）</span>
+            </span>
+            <input v-model="form.max_per_submitter" type="number" min="1" />
+          </label>
+        </div>
+
+        <!--
+          这条限制的边界必须写在界面上，否则管理员会以为它是硬限制。
+          放在"提交需要登录"旁边正是因为它与那个开关直接相关。
+        -->
+        <p class="dim note">
+          「每人最多」对<strong>匿名</strong>活动只能防误操作：匿名提交者的身份由
+          客户端自报，换一个浏览器即可绕过。要真正限制，请勾选下面的"提交需要登录"
+          —— 那时提交者是可核实的登录用户。
+        </p>
+
+        <div class="grid">
 
           <!--
             复选框自成一行控件：给它一个和输入框等高的行，标签才不会在两列网格里
@@ -332,6 +360,16 @@ watch(() => props.eventId, load)
 .block__lead {
   margin: -6px 0 0;
   font-size: 13px;
+}
+
+.note {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+.note strong {
+  color: var(--bone);
 }
 
 .grid {
