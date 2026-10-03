@@ -6,12 +6,13 @@
  * 直接访问也会被路由守卫挡回。
  */
 import { computed } from 'vue'
-import { RouterLink, RouterView, useRouter } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 
 const navItems = computed(() => {
   const items = [
@@ -23,6 +24,23 @@ const navItems = computed(() => {
   }
   return items
 })
+
+/**
+ * 这一项是否处于选中态。
+ *
+ * **不能用 `router-link-active`。** 那个类按**路由记录**判定：当前路由的 matched
+ * 里要包含链接指向的那条记录。而活动详情（`events/:eventId`）在路由表里是活动
+ * 列表（`events`）的**兄弟**而不是子路由，所以进详情页时 matched 里没有 `events`
+ * 那条记录 —— 于是"活动"这一项的选中态消失。
+ *
+ * 这里改成按**解析出来的路径**判断：当前 URL 等于它、或落在它下面，就算选中。
+ * 这与使用者对侧边栏的预期一致（"我在活动这一块里"），也不必为了选中态去把路由
+ * 表扭成嵌套结构 —— 那需要给分组记录配一个什么都不渲染的组件，得不偿失。
+ */
+function isActive(name: string): boolean {
+  const target = router.resolve({ name }).path
+  return route.path === target || route.path.startsWith(`${target}/`)
+}
 
 async function onSignOut(): Promise<void> {
   await auth.signOut()
@@ -44,6 +62,7 @@ async function onSignOut(): Promise<void> {
           v-for="item in navItems"
           :key="item.name"
           class="shell__link"
+          :class="{ 'shell__link--active': isActive(item.name) }"
           :to="{ name: item.name }"
         >
           <span class="shell__link-label">{{ item.label }}</span>
@@ -152,8 +171,13 @@ async function onSignOut(): Promise<void> {
   text-decoration: none;
 }
 
-/* 当前项用左侧红条标记，而不是整块高亮 —— 更接近海报的克制感 */
-.shell__link.router-link-active {
+/*
+  当前项用左侧红条标记，而不是整块高亮 —— 更接近海报的克制感。
+
+  **这条规则挂在自定义类上，不是 `router-link-active`** —— 后者按路由记录判定，
+  认不出"活动详情属于活动"这件事。见脚本里 `isActive` 的说明。
+*/
+.shell__link--active {
   background: var(--red-soft);
   box-shadow: inset 2px 0 0 var(--red);
 }
