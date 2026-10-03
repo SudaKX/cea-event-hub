@@ -17,6 +17,7 @@ import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import SplitPane from '@/components/ui/SplitPane.vue'
 import { useDragSelect } from '@/composables/useDragSelect'
+import { useToast } from '@/composables/useToast'
 import UserDetailDialog from './UserDetailDialog.vue'
 import type { ResetToken, UserAdmin } from '@/types/api'
 
@@ -52,8 +53,10 @@ const roster = ref<UserAdmin[]>([])
 const detail = ref<UserAdmin | null>(null)
 const sideWidth = ref(300)
 
+const toast = useToast()
+
+/** 只留**加载失败**。批量改动与令牌签发的反馈走通知（见 useToast 的分工表） */
 const error = ref('')
-const notice = ref('')
 const loading = ref(false)
 const issued = ref<ResetToken | null>(null)
 
@@ -87,7 +90,6 @@ async function load(): Promise<void> {
     total.value = data.total
     selected.value = new Set()
     error.value = ''
-    notice.value = ''
 
     // 过滤后结果变少、或停用了某个人之后，当前页可能已经不存在了。
     // 不退页的话会停在一片空白上，而分页器还说这一页存在。
@@ -184,10 +186,12 @@ async function onRosterUpdate(changes: { role?: string; is_active?: boolean }): 
     await load()
     // 期间被删掉的账号会被跳过；数量对不上时说一声，而不是默默少改几个
     if (data.updated < ids.length) {
-      notice.value = `已处理 ${data.updated} 位，另有 ${ids.length - data.updated} 位已不存在`
+      toast.ok(`已处理 ${data.updated} 位，另有 ${ids.length - data.updated} 位已不存在`)
+    } else {
+      toast.ok(`已处理 ${data.updated} 位`)
     }
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '批量操作失败'
+    toast.fail(caught instanceof ApiError ? caught.message : '批量操作失败')
   }
 }
 
@@ -196,14 +200,16 @@ async function onRosterUpdate(changes: { role?: string; is_active?: boolean }): 
 /* ------------------------------------------------------------------ */
 
 async function issueToken(user: UserAdmin): Promise<void> {
-  notice.value = ''
   issued.value = null
   try {
     const { data } = await http.post<ResetToken>(`/admin/users/${user.id}/reset-token`)
-    // 明文只出现这一次，因此必须让管理员当场看到
+    /*
+      明文只出现这一次，必须让管理员当场看到，所以**发的是卡片而不是通知** ——
+      通知会自动消失，用它承载"只会显示一次"的东西等于把它弄丢。
+    */
     issued.value = data
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '签发失败'
+    toast.fail(caught instanceof ApiError ? caught.message : '签发失败')
   }
 }
 
@@ -211,9 +217,9 @@ async function copyToken(): Promise<void> {
   if (!issued.value) return
   try {
     await navigator.clipboard.writeText(issued.value.token)
-    notice.value = '令牌已复制'
+    toast.ok('令牌已复制')
   } catch {
-    notice.value = '复制失败，请手动选中复制'
+    toast.fail('复制失败，请手动选中复制')
   }
 }
 
@@ -258,7 +264,6 @@ onMounted(load)
     </header>
 
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
-    <p v-if="notice" class="ok">{{ notice }}</p>
 
     <!-- 令牌明文只出现这一次 -->
     <div v-if="issued" class="panel token">

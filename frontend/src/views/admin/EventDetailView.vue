@@ -8,9 +8,11 @@ import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } f
 import Checkbox from '@/components/ui/Checkbox.vue'
 import FileInput from '@/components/ui/FileInput.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
+import { useToast } from '@/composables/useToast'
 import { EVENT_VISIBILITY, EVENT_VISIBILITY_OPTIONS, parseVisibility } from '@/domain/event'
 import type { ContentFile, EventAdmin } from '@/types/api'
 
+const toast = useToast()
 const props = defineProps<{ eventId: string }>()
 
 /** 状态选项把后果写在标签里 —— 光看 draft/live/archived 不知道意味着什么 */
@@ -23,8 +25,13 @@ const STATUS_OPTIONS: SelectOption[] = [
 const router = useRouter()
 const event = ref<EventAdmin | null>(null)
 const files = ref<ContentFile[]>([])
+/**
+ * 只有**加载失败**留在这里。
+ *
+ * 操作结果（保存、投放、删除）走通知 —— 参见 `useToast` 里那张表：加载失败内联
+ * 是因为通知会消失、留下一片空白，比一直显示错误更糟。
+ */
 const error = ref('')
-const notice = ref('')
 const loading = ref(true)
 const busy = ref(false)
 const archive = ref<File | null>(null)
@@ -85,7 +92,6 @@ async function load(): Promise<void> {
 
 async function onSave(): Promise<void> {
   busy.value = true
-  notice.value = ''
   try {
     event.value = await updateEvent(props.eventId, {
       title: form.value.title,
@@ -100,9 +106,9 @@ async function onSave(): Promise<void> {
           ? null
           : Number(form.value.max_per_submitter),
     })
-    notice.value = '已保存'
+    toast.ok('已保存')
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '保存失败'
+    toast.fail(caught instanceof ApiError ? caught.message : '保存失败')
   } finally {
     busy.value = false
   }
@@ -111,15 +117,13 @@ async function onSave(): Promise<void> {
 async function onDeploy(): Promise<void> {
   if (!archive.value) return
   busy.value = true
-  error.value = ''
-  notice.value = ''
   try {
     const result = await deployContent(props.eventId, archive.value)
-    notice.value = `已投放 ${result.file_count} 个文件，内容版本 v${result.content_version}`
+    toast.ok(`已投放 ${result.file_count} 个文件，内容版本 v${result.content_version}`)
     archive.value = null
     await load()
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '投放失败'
+    toast.fail(caught instanceof ApiError ? caught.message : '投放失败')
   } finally {
     busy.value = false
   }
@@ -129,9 +133,11 @@ async function onDeleteEvent(): Promise<void> {
   if (!window.confirm(`删除活动 ${props.eventId}？提交与附件会一并移除，不可撤销。`)) return
   try {
     await deleteEvent(props.eventId)
+    // 先推通知再跳转：跳转之后本组件会卸载，但通知栈在 App 层，不受影响
+    toast.ok(`活动 ${props.eventId} 已删除`)
     await router.push({ name: 'admin-events' })
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '删除失败'
+    toast.fail(caught instanceof ApiError ? caught.message : '删除失败')
   }
 }
 
@@ -158,7 +164,6 @@ watch(() => props.eventId, load)
     </header>
 
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
-    <p v-if="notice" class="ok">{{ notice }}</p>
 
     <div v-if="loading" class="panel empty">加载中…</div>
 

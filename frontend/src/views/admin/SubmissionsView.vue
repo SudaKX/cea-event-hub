@@ -23,6 +23,7 @@ import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import SplitPane from '@/components/ui/SplitPane.vue'
 import { useDragSelect } from '@/composables/useDragSelect'
+import { useToast } from '@/composables/useToast'
 import {
   SUBMISSION_STATUS,
   SUBMISSION_STATUS_OPTIONS,
@@ -47,6 +48,8 @@ const detail = ref<Submission | null>(null)
 /** 审核动作说明弹窗 */
 const helpOpen = ref(false)
 
+const toast = useToast()
+
 const submissions = ref<Submission[]>([])
 const total = ref(0)
 const selected = ref<Set<number>>(new Set())
@@ -60,12 +63,11 @@ const selected = ref<Set<number>>(new Set())
 const searchInput = ref('')
 const appliedSearch = ref('')
 
-const error = ref('')
 /**
- * 非错误的提示。现在只有一个来源：批量操作**部分成功** —— 勾选期间有人删掉了
- * 其中几条。那不是失败，但也不能不说，否则管理员会以为全都改了。
+ * 只留**加载失败**。审核、批量改状态、删除这些操作的结果都走通知 —— 见
+ * `useToast` 里那张分工表。
  */
-const notice = ref('')
+const error = ref('')
 const loading = ref(false)
 
 /** 活动下拉：标识 + 标题，两者都要，光看标识认不出是哪个活动 */
@@ -122,8 +124,6 @@ async function loadSubmissions(): Promise<void> {
     total.value = result.total
     selected.value = new Set()
     error.value = ''
-    // 提示只关于"上一次批量操作"，重新加载就该消失
-    notice.value = ''
 
     // 删到当前页空了就退一页 —— 否则会停在一个已经不存在的页码上，看到一片空白
     if (page.value > pageCount.value) {
@@ -199,10 +199,12 @@ async function onQueueReview(status: number): Promise<void> {
     await loadSubmissions()
     // 勾选期间可能有人删掉了其中几条，数量对不上时说一声，而不是默默少改几条
     if (reviewed < ids.length) {
-      notice.value = `已处理 ${reviewed} 条，另有 ${ids.length - reviewed} 条已不存在`
+      toast.ok(`已处理 ${reviewed} 条，另有 ${ids.length - reviewed} 条已不存在`)
+    } else {
+      toast.ok(`已处理 ${reviewed} 条`)
     }
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '批量改状态失败'
+    toast.fail(caught instanceof ApiError ? caught.message : '批量改状态失败')
   }
 }
 
@@ -214,8 +216,9 @@ async function onQueueDelete(): Promise<void> {
     await deleteSubmissions(ids)
     queue.value = []
     await loadSubmissions()
+    toast.ok(`已删除 ${ids.length} 条，名额已释放`)
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '批量删除失败'
+    toast.fail(caught instanceof ApiError ? caught.message : '批量删除失败')
   }
 }
 
@@ -367,8 +370,6 @@ onMounted(async () => {
     </Modal>
 
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
-    <!-- 不是错误，但也得说：否则"改了几条"和"点了几条"对不上时没人知道 -->
-    <p v-if="notice" class="ok">{{ notice }}</p>
 
     <SplitPane v-model="sideWidth" :min="260" :max="560">
       <!--

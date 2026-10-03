@@ -393,3 +393,33 @@ describe('绝对定位必须有定位祖先', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('通知不挡住底下的内容', () => {
+  /*
+    通知容器铺在右下角一整片。容器若照常接收指针事件，那片区域就会变成死区 ——
+    底下明明有按钮，却点不动，而且看不出原因（通知本身可能只有一条、只占一小块）。
+
+    所以：**容器 `pointer-events: none`，条目自己 `auto`**。少了后一半，通知上的
+    关闭按钮就点不动了；少了前一半，右下角就废了。
+  */
+  const source = () =>
+    readFileSync(resolve(srcDir, 'components/ui/ToastHost.vue'), 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '')
+
+  it('容器不吃指针事件', () => {
+    const css = source()
+    const container = /\.toasts\s*\{[^}]*\}/.exec(css)?.[0] ?? ''
+
+    expect(container).toContain('position: fixed')
+    expect(container).toContain('pointer-events: none')
+  })
+
+  it('条目自己重新打开指针事件', () => {
+    // 少了这一条，通知上的关闭按钮就点不动
+    const css = source()
+    const item = /\.toast\s*\{[^}]*\}/.exec(css)?.[0] ?? ''
+
+    expect(item).toContain('pointer-events: auto')
+  })
+})

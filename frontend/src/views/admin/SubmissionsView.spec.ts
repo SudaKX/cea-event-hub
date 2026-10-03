@@ -32,6 +32,7 @@ vi.mock('@/api/submissions', () => ({
   attachmentUrl: (id: number, fileId: number) => `/api/v1/submissions/${id}/files/${fileId}`,
 }))
 
+import { useToast } from '@/composables/useToast'
 import SubmissionsView from './SubmissionsView.vue'
 import { SUBMISSION_STATUS } from '@/domain/submission'
 
@@ -105,6 +106,8 @@ const dialog = (wrapper: ReturnType<typeof mount>) =>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // 通知是模块级状态，会跨用例残留
+  useToast().clear()
   // 默认"全都改成功"
   reviewSubmissions.mockImplementation((ids: number[]) => Promise.resolve(ids.length))
   deleteSubmissions.mockResolvedValue(0)
@@ -265,28 +268,35 @@ describe('队列', () => {
     /*
       勾选期间可能有人删掉了其中几条。批量端点返回的是**实际改动数** ——
       对不上时说一声，否则管理员会以为全改了。
+
+      提示走通知（见 useToast 的分工表），所以断言通知栈而不是页面上的段落。
     */
     const wrapper = await mountView()
     await enqueueRows(wrapper, [0, 1])
     reviewSubmissions.mockResolvedValue(1)
 
     await button(wrapper, '采用').trigger('click')
-    await vi.waitFor(() => expect(wrapper.find('.ok').exists()).toBe(true))
+    await vi.waitFor(() => expect(useToast().toasts.value).toHaveLength(1))
 
-    expect(wrapper.find('.ok').text()).toContain('已处理 1 条')
-    expect(wrapper.find('.ok').text()).toContain('1 条已不存在')
+    const [toast] = useToast().toasts.value
+    expect(toast!.tone).toBe('ok')
+    expect(toast!.message).toContain('已处理 1 条')
+    expect(toast!.message).toContain('1 条已不存在')
     wrapper.unmount()
   })
 
-  it('全部成功时不多话', async () => {
+  it('全部成功时也给一条通知', async () => {
+    /*
+      全成功也要说一声：批量操作的结果不在用户视线里（列表会重新加载，但"改了几
+      条"并不直接可见），没有回馈会让人不确定到底生效没有。
+    */
     const wrapper = await mountView()
     await enqueueRows(wrapper, [0, 1])
 
     await button(wrapper, '采用').trigger('click')
-    await vi.waitFor(() => expect(reviewSubmissions).toHaveBeenCalled())
-    await wrapper.vm.$nextTick()
+    await vi.waitFor(() => expect(useToast().toasts.value).toHaveLength(1))
 
-    expect(wrapper.find('.ok').exists()).toBe(false)
+    expect(useToast().toasts.value[0]!.message).toBe('已处理 2 条')
     wrapper.unmount()
   })
 

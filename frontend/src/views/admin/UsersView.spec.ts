@@ -22,6 +22,8 @@ vi.mock('@/api/client', async () => {
   return { ApiError: actual.ApiError, http: { get, patch: patchFn, post } }
 })
 
+import { ApiError } from '@/api/client'
+import { useToast } from '@/composables/useToast'
 import UsersView from './UsersView.vue'
 import type { UserAdmin } from '@/types/api'
 
@@ -78,6 +80,8 @@ function pagerButton(wrapper: ReturnType<typeof mount>, label: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // 通知是模块级状态，会跨用例残留
+  useToast().clear()
   // 默认"全都改成功"
   post.mockImplementation((url: string, body?: { ids?: number[] }) => {
     if (url === '/admin/users:bulk') {
@@ -337,9 +341,34 @@ describe('名单与行交互', () => {
     await wrapper.vm.$nextTick()
 
     await button(wrapper, '提权').trigger('click')
-    await vi.waitFor(() => expect(wrapper.find('.ok').exists()).toBe(true))
+    await vi.waitFor(() => expect(useToast().toasts.value).toHaveLength(1))
 
-    expect(wrapper.find('.ok').text()).toContain('已处理 1 位')
+    const [toast] = useToast().toasts.value
+    expect(toast!.tone).toBe('ok')
+    expect(toast!.message).toContain('已处理 1 位')
+    wrapper.unmount()
+  })
+
+  it('批量失败走通知而不是内联', async () => {
+    /*
+      操作结果走通知、加载失败才内联 —— 见 useToast 里那张分工表。
+      批量改权限失败是操作结果，不该留在页面上不走。
+    */
+    const wrapper = await mountView()
+    post.mockRejectedValue(new ApiError('only_admin', '不能移除最后一个管理员', 409))
+
+    await selectRow(wrapper, 0)
+    await button(wrapper, '加入名单').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    await button(wrapper, '降权').trigger('click')
+    await vi.waitFor(() => expect(useToast().toasts.value).toHaveLength(1))
+
+    const [toast] = useToast().toasts.value
+    expect(toast!.tone).toBe('error')
+    expect(toast!.message).toBe('不能移除最后一个管理员')
+    // 页面上的内联错误区只留给加载失败
+    expect(wrapper.find('.alert').exists()).toBe(false)
     wrapper.unmount()
   })
 

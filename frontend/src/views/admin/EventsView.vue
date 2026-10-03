@@ -7,6 +7,7 @@ import { ApiError } from '@/api/client'
 import { createEvent, listAdminEvents } from '@/api/events'
 import Checkbox from '@/components/ui/Checkbox.vue'
 import Select from '@/components/ui/Select.vue'
+import { useToast } from '@/composables/useToast'
 import {
   EVENT_VISIBILITY,
   EVENT_VISIBILITY_OPTIONS,
@@ -16,8 +17,11 @@ import {
 } from '@/domain/event'
 import type { EventAdmin } from '@/types/api'
 
+const toast = useToast()
+
 const events = ref<EventAdmin[]>([])
 const loading = ref(true)
+/** 只留**加载失败**；创建的结果走通知（见 useToast 里的分工表） */
 const error = ref('')
 const showCreate = ref(false)
 const busy = ref(false)
@@ -50,10 +54,10 @@ async function load(): Promise<void> {
 async function onCreate(): Promise<void> {
   busy.value = true
   fieldErrors.value = {}
-  error.value = ''
+  const created = draft.value.id.trim()
   try {
     await createEvent({
-      id: draft.value.id.trim(),
+      id: created,
       title: draft.value.title.trim(),
       summary: draft.value.summary.trim() || undefined,
       submission_requires_login: draft.value.submission_requires_login,
@@ -77,12 +81,17 @@ async function onCreate(): Promise<void> {
       visibility: String(EVENT_VISIBILITY.PUBLIC),
     }
     await load()
+    toast.ok(`活动 ${created} 已创建，当前为草稿`)
   } catch (caught) {
+    /*
+      字段级错误留在表单里（用户正看着输入框，要指出的是**哪一个**字段），
+      其余走通知。
+    */
     if (caught instanceof ApiError) {
-      error.value = caught.message
       fieldErrors.value = caught.fields ?? {}
+      if (Object.keys(fieldErrors.value).length === 0) toast.fail(caught.message)
     } else {
-      error.value = '创建失败'
+      toast.fail('创建失败')
     }
   } finally {
     busy.value = false
