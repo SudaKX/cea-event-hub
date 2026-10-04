@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Annotated
 
@@ -76,7 +77,37 @@ def _submission_service(settings, storage) -> SubmissionService:
     return SubmissionService(settings, storage)
 
 
-def _render_submission(session, submission, service: SubmissionService):
+def _submitter_displays(session, submitters: Iterable[str]) -> dict[str, str]:
+    """把一批提交者的**可显示名字**一次查出来。
+
+    匿名的 `a:{client_id}` 原样返回（那本来就是给人看的）；`u:{id}` 则要看账号还在不在
+    —— 在就给显示名，不在就给「已删除用户 #N」。
+
+    删除账号之后 `u:{id}` 会永久指向一个不存在的人（id 不再复用），而管理员面对一个
+    悬空的 `u:7` 只能自己推断"为什么查不到人"。**一次查询解析整页**：逐条查就是 N+1，
+    一页 50 条就是 50 次。
+    """
+    displays: dict[str, str] = {submitter: submitter for submitter in submitters}
+
+    user_ids: list[int] = []
+    for submitter in submitters:
+        if submitter.startswith("u:"):
+            try:
+                user_ids.append(int(submitter[2:]))
+            except ValueError:
+                # 形态不对就原样显示，不猜
+                continue
+
+    if not user_ids:
+        return displays
+
+    found = UserRepository().display_names_for(session, sorted(set(user_ids)))
+    for user_id in user_ids:
+        displays[f"u:{user_id}"] = found.get(user_id) or f"已删除用户 #{user_id}"
+    return displays
+
+
+def _render_submission(session, submission, service: SubmissionService, *, display=None):
     """管理端视图：附件的类型由**字节嗅探**得出，不采信客户端声明。"""
     records = service.files.list_for_submission(session, submission.id)
     return submission_to_public(
@@ -85,6 +116,7 @@ def _render_submission(session, submission, service: SubmissionService):
             file_to_public(record, service.attachment_mime(record))
             for record in records
         ],
+        submitter_display=display,
     )
 
 
@@ -305,8 +337,16 @@ def list_submissions(
         paginate(statement, offset=(page - 1) * page_size, limit=page_size)
     ).all()
 
+    # **一次**解析整页的提交者，而不是每条查一次
+    displays = _submitter_displays(session, {row.submitter for row in rows})
+
     return SubmissionListResponse(
-        submissions=[_render_submission(session, row, service) for row in rows],
+        submissions=[
+            _render_submission(
+                session, row, service, display=displays.get(row.submitter)
+            )
+            for row in rows
+        ],
         total=total,
     )
 
@@ -328,8 +368,13 @@ def review_submission(
     submission = service.review(
         session, submission_id=submission_id, status_value=payload.status, actor=admin
     )
+    # 审核后前端会用这条响应就地更新那一行，因此显示名也得带上 —— 否则刚审核完的
+    # 那一行会从"张三"回落成 `u:7`
+    displays = _submitter_displays(session, {submission.submitter})
     return SubmissionEnvelope(
-        submission=_render_submission(session, submission, service)
+        submission=_render_submission(
+            session, submission, service, display=displays.get(submission.submitter)
+        )
     )
 
 
@@ -497,6 +542,29 @@ def update_user(
             raise NotFound("用户不存在")
 
     return UserAdminEnvelope(user=UserAdminPublic.from_model(target))
+
+
+@router.delete(
+    "/users/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删除用户账号",
+)
+def delete_user(
+    user_id: int,
+    session: DbSession,
+    admin: AdminUser,
+    settings: RuntimeSettings,
+) -> Response:
+    """彻底删除账号。
+
+    **与"停用"回答的是不同的问题**：停用是"这个人不在了"（可逆、提交署名完好），
+    删除是"这个账号本就不该存在"（不可逆、署名此后只剩一个编号）。因此两者是并列的
+    动作，不设"必须先停用"的门槛 —— 那挡不住误操作，真正挡住它的是确认框。
+
+    **他的提交不会消失**，改的只是"谁交的"从此不可考。
+    """
+    AuthService(settings).delete_user(session, actor=admin, target_id=user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

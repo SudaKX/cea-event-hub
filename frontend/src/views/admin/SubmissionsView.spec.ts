@@ -61,6 +61,8 @@ function submission(id: number) {
     kind: 'signup',
     status: SUBMISSION_STATUS.RECEIVED,
     submitter: `a:browser-${id}`,
+    // 管理端列表会给它，其余端点留空。放在默认值里，用例才能按需覆写
+    submitter_display: null as string | null,
     from_authenticated_user: false,
     payload: { name: `n${id}` },
     created_at: '2026-10-01T00:00:00Z',
@@ -73,12 +75,17 @@ function submission(id: number) {
  *
  * `total` 可以调大，用来造出多页 —— 像"翻到第 2 页再搜索，应当回到第 1 页"这类
  * 断言，只有一页时根本无从验证（下一页按钮是禁用的）。
+ *
+ * `submissions` 用来替换默认那两条。**必须在挂载前给定**：视图只在加载时取一次，
+ * 挂载之后再改 mock 不会重拉（那样的用例会靠默认数据通过，证明不了任何事）。
  */
-async function mountView(options: { total?: number } = {}) {
+async function mountView(
+  options: { total?: number; submissions?: ReturnType<typeof submission>[] } = {},
+) {
   const total = options.total ?? 2
   listAdminEvents.mockResolvedValue([EVENT])
   listEventSubmissions.mockResolvedValue({
-    submissions: [submission(1), submission(2)],
+    submissions: options.submissions ?? [submission(1), submission(2)],
     total,
   })
 
@@ -640,6 +647,43 @@ describe('点行看详情', () => {
 
     await wrapper.find('tbody tr').trigger('dblclick')
     expect(wrapper.find('.detail__json').text()).toContain('secret')
+    wrapper.unmount()
+  })
+})
+
+describe('已删除账号的提交者显示', () => {
+  it('优先显示后端给的显示名', async () => {
+    // 账号还在时是显示名 —— 比裸的 u:2 有用得多
+    const wrapper = await mountView({
+      submissions: [
+        { ...submission(1), submitter: 'u:2', submitter_display: '张三' },
+      ],
+    })
+
+    expect(wrapper.find('.submitter .cell').text()).toBe('张三')
+    wrapper.unmount()
+  })
+
+  it('账号已删除时显示为「已删除用户 #N」', async () => {
+    const wrapper = await mountView({
+      submissions: [
+        { ...submission(1), submitter: 'u:7', submitter_display: '已删除用户 #7' },
+      ],
+    })
+
+    expect(wrapper.find('.submitter .cell').text()).toBe('已删除用户 #7')
+    wrapper.unmount()
+  })
+
+  it('没有显示名时回落到原始标识', async () => {
+    // 其余端点不填这个字段，那时必须还能显示点什么
+    const wrapper = await mountView({
+      submissions: [
+        { ...submission(1), submitter: 'u:404', submitter_display: null },
+      ],
+    })
+
+    expect(wrapper.find('.submitter .cell').text()).toBe('u:404')
     wrapper.unmount()
   })
 })

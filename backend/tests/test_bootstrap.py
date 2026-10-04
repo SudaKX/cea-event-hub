@@ -186,7 +186,10 @@ class TestStartupWiring:
         monkeypatch.setattr(settings, "ADMIN_INITIAL_PASSWORD", "startup-password")
 
         with TestClient(app) as client:
-            assert client.get("/api/v1/health").status_code == 200
+            # 探针用 /events 而不是 /health：健康检查现在会真的查迁移状态，
+            # 而测试库是 create_all 建的、没有 alembic_version 表，因此它会（正确地）
+            # 返回 503。这里要问的是"应用起来了并且能服务请求"，与迁移无关。
+            assert client.get("/api/v1/events").status_code == 200
 
         user = _get(test_db, "admin")
         assert user is not None
@@ -199,6 +202,6 @@ class TestStartupWiring:
         monkeypatch.setattr(settings, "ADMIN_BOOTSTRAP_ENABLED", False)
 
         with TestClient(app) as client:
-            assert client.get("/api/v1/health").status_code == 200
+            assert client.get("/api/v1/events").status_code == 200
 
         assert _count_users(test_db) == 0

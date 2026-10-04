@@ -27,6 +27,9 @@ NOT_SETTINGS = {
     "SQL",
     "SQLITE",
     "MYSQL",
+    # SQL 关键字：部署文档讲 id 分配策略时会提到，它们是数据库语法而不是配置项
+    "AUTOINCREMENT",
+    "AUTO_INCREMENT",
     "URL",
     "URLS",
     "UUID",

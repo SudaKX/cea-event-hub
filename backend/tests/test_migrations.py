@@ -25,7 +25,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND = REPO_ROOT / "backend"
 
 #: 一条链上包含批处理 ALTER 的关键版本。逐个升过去，每一步都查数据还在不在。
-BATCH_STEPS = ["8d54ac924e60", "9f1c2a4b7e03", "afbd98e64a5e"]
+#:
+#: `4d594b75179e`（给 users.id 加 AUTOINCREMENT）是其中最凶的一条：它重建的
+#: `users` 被五处外键引用，其中两处是 `ON DELETE CASCADE`（sessions、user_tokens）、
+#: 三处是 `SET NULL`（events.created_by、submissions.reviewed_by、
+#: submission_files.uploaded_by）。只数行数抓不到后者的损坏，所以 `_seed` 会把那
+#: 三列都填上，`_audit_columns` 专门盯着它们不被置空。
+BATCH_STEPS = ["8d54ac924e60", "9f1c2a4b7e03", "afbd98e64a5e", "4d594b75179e"]
 
 
 def _config(database: Path) -> Config:
@@ -50,8 +56,36 @@ def _counts(database: Path) -> dict[str, int]:
     try:
         return {
             table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in ("events", "submissions", "submission_files")
+            for table in (
+                "events",
+                "submissions",
+                "submission_files",
+                # 用户侧的这两张表是 ON DELETE CASCADE：重建 users 时外键若开着，
+                # 它们会被连带删掉
+                "sessions",
+                "user_tokens",
+            )
         }
+    finally:
+        connection.close()
+
+
+def _audit_columns(database: Path) -> tuple:
+    """三处 `ON DELETE SET NULL` 的审计列。
+
+    只数行数抓不到它们的损坏：`DROP TABLE users` 在外键开着时会把它们**清空**，
+    而每一行的数量都不变。所以单独把值取出来比。
+
+    真实列名是 `events.owner_id`、`submissions.user_id`、`submissions.reviewed_by`
+    —— `submission_files` 上没有指向用户的列。
+    """
+    connection = sqlite3.connect(database)
+    try:
+        return (
+            connection.execute("SELECT owner_id FROM events").fetchone()[0],
+            connection.execute("SELECT user_id FROM submissions").fetchone()[0],
+            connection.execute("SELECT reviewed_by FROM submissions").fetchone()[0],
+        )
     finally:
         connection.close()
 
@@ -59,14 +93,31 @@ def _counts(database: Path) -> dict[str, int]:
 def _seed(database: Path) -> None:
     connection = sqlite3.connect(database)
     try:
+        # 先造一个用户：下面三处外键都指向它，重建 users 时它们要么被置空、要么
+        # 连同会话一起被级联掉
         connection.execute(
-            "INSERT INTO events (id, title, status, entry_path, content_version, "
-            "submission_requires_login, submission_count, created_at, updated_at) "
-            "VALUES ('e1','t','live','index.html',0,0,1,'2026-01-01','2026-01-01')"
+            "INSERT INTO users (id, username, display_name, password_hash, role, "
+            "is_active, created_at, updated_at) "
+            "VALUES (1,'alice','Alice','x','user',1,'2026-01-01','2026-01-01')"
         )
         connection.execute(
-            "INSERT INTO submissions (id, event_id, submitter, payload, status, created_at) "
-            "VALUES (1,'e1','a:alice','{}',1,'2026-01-01')"
+            "INSERT INTO sessions (token_hash, user_id, created_at, expires_at, "
+            "last_seen_at) VALUES ('sessionhash',1,'2026-01-01','2027-01-01','2026-01-01')"
+        )
+        connection.execute(
+            "INSERT INTO user_tokens (user_id, purpose, token_hash, expires_at, "
+            "created_at) VALUES (1,'email_verify','tokenhash','2027-01-01','2026-01-01')"
+        )
+        connection.execute(
+            "INSERT INTO events (id, title, status, entry_path, content_version, "
+            "submission_requires_login, submission_count, owner_id, created_at, "
+            "updated_at) "
+            "VALUES ('e1','t','live','index.html',0,0,1,1,'2026-01-01','2026-01-01')"
+        )
+        connection.execute(
+            "INSERT INTO submissions (id, event_id, submitter, user_id, payload, "
+            "status, reviewed_by, created_at) "
+            "VALUES (1,'e1','u:1',1,'{}',1,1,'2026-01-01')"
         )
         connection.execute(
             "INSERT INTO submission_files (submission_id, event_id, original_name, "
@@ -81,26 +132,32 @@ def _seed(database: Path) -> None:
 
 @pytest.mark.slow
 def test_batch_migrations_do_not_delete_dependent_rows(migrated_db: Path) -> None:
-    """批处理 ALTER 不能连带删掉依赖表的行。
+    """批处理 ALTER 不能连带删掉依赖表的行，也不能把审计列清空。
 
-    这条如果红了，说明迁移期间外键又开着 —— 表现是升级之后提交全没了，且**没有任何
-    报错**，所以要靠这个测试拦住。
+    这条如果红了，说明迁移期间外键又开着 —— 表现是升级之后依赖行没了（或者那三个
+    `SET NULL` 的列被清空），且**没有任何报错**，所以要靠这个测试拦住。
     """
     config = _config(migrated_db)
     # 停在批处理迁移之前
     command.upgrade(config, "7d1b16f0e498")
     _seed(migrated_db)
-    assert _counts(migrated_db) == {
+    expected = {
         "events": 1,
         "submissions": 1,
         "submission_files": 1,
+        "sessions": 1,
+        "user_tokens": 1,
     }
+    assert _counts(migrated_db) == expected
+    assert _audit_columns(migrated_db) == (1, 1, 1)
 
     for revision in BATCH_STEPS:
         command.upgrade(config, revision)
         counts = _counts(migrated_db)
-        assert counts == {"events": 1, "submissions": 1, "submission_files": 1}, (
-            f"升到 {revision} 之后数据丢了：{counts}"
+        assert counts == expected, f"升到 {revision} 之后数据丢了：{counts}"
+        # 行数不变也可能是被"置空"而不是被删 —— 那三个 SET NULL 的列单独比
+        assert _audit_columns(migrated_db) == (1, 1, 1), (
+            f"升到 {revision} 之后审计列被清空了"
         )
 
 

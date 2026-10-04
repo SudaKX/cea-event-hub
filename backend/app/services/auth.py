@@ -47,6 +47,7 @@ from app.core.text import (
     username_shape_error,
 )
 from app.db.models import PendingRegistration, User, UserSession
+from app.repositories.submissions import SubmitterQuotaRepository
 from app.repositories.users import (
     PendingRegistrationRepository,
     SessionRepository,
@@ -72,6 +73,9 @@ class AuthService:
         self.sessions = session_repo or SessionRepository()
         self.tokens = token_service or UserTokenService(settings)
         self.pending = pending_repo or PendingRegistrationRepository()
+        # 删账号时要清掉该用户名下的配额计数行。那几行没有外键承托、不会随账号消失，
+        # 而它们与用户生命周期是同一件事的两半 —— 放在这里，接口层就不必去凑。
+        self.submitter_quotas = SubmitterQuotaRepository()
 
     # ------------------------------------------------------------------
     # 注册（两阶段：占位 -> 核销建号）
@@ -616,6 +620,43 @@ class AuthService:
         )
         if self.users.count_admins(session) - losing <= 0:
             raise LastAdminProtected()
+
+    def delete_user(self, session: Session, *, actor: User, target_id: int) -> None:
+        """彻底删除一个账号（design.md 决策 4 与 6）。
+
+        **提交一律保留。** `submissions.submitter` 是派生字符串、没有外键，因此删账号
+        不会碰它 —— 那是刻意的：社团收集的数据与"这个人还在不在"是两件事，这也与既有
+        的"停用不删历史提交"取值一致。代价是署名从此不可考，只剩一个编号；界面因此
+        把它显示成「已删除用户 #N」（本变更第 4 组）。
+
+        删除**不会**让此后的注册继承这些数据 —— 前提是 `users.id` 不再复用，那是本变更
+        的迁移所保证的（决策 3）。
+
+        守卫与停用同源：不能删掉最后一个**可用**管理员，不能删自己。删除写一条审计
+        日志，与"签发重置令牌"的既有做法一致。
+        """
+        target = self._load_target(session, target_id)
+
+        if target.id == actor.id:
+            raise BadRequest("不能删除自己的账号")
+        self._assert_not_last_admin(session, target)
+
+        # 先记下要用的信息：删完之后 target 就成了游离对象
+        username = target.username
+        submitter = f"u:{target.id}"
+
+        # 会话与令牌由 ON DELETE CASCADE 一并消失；三处审计列由 SET NULL 置空。
+        # 同一事务：任何一步失败都整体回滚，不会留下"账号没了但计数还在"的中间态
+        self.users.delete(session, target)
+        self.submitter_quotas.delete_for_submitter(session, submitter)
+
+        logger.info(
+            "管理员 %r 删除了用户 %r（id=%s）；其提交保留，署名成为永久标识 %s",
+            actor.username,
+            username,
+            target_id,
+            submitter,
+        )
 
     def _assert_not_last_admin(self, session: Session, target: User) -> None:
         """不能移除最后一个管理员，否则系统会失去管理能力。"""

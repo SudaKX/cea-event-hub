@@ -16,6 +16,7 @@ import Checkbox from '@/components/ui/Checkbox.vue'
 import Pager from '@/components/ui/Pager.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
 import SplitPane from '@/components/ui/SplitPane.vue'
+import { useConfirm } from '@/composables/useConfirm'
 import { useDragSelect } from '@/composables/useDragSelect'
 import { useToast } from '@/composables/useToast'
 import UserDetailDialog from './UserDetailDialog.vue'
@@ -54,6 +55,8 @@ const detail = ref<UserAdmin | null>(null)
 const sideWidth = ref(300)
 
 const toast = useToast()
+// 删除不可逆，确认框是它唯一的闸门 —— 用应用自有的那个，而不是 window.confirm
+const confirm = useConfirm()
 
 /** 只留**加载失败**。批量改动与令牌签发的反馈走通知（见 useToast 的分工表） */
 const error = ref('')
@@ -221,6 +224,37 @@ async function copyToken(): Promise<void> {
   } catch {
     toast.fail('复制失败，请手动选中复制')
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 单条：删除账号                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 删除是不可逆的，因此**必须**先过确认框，且文案要把代价说全：提交会保留、署名
+ * 变成编号、不可撤销。只说"确定删除吗"会让人以为连提交一起没了。
+ */
+async function onDeleteUser(user: UserAdmin): Promise<void> {
+  const ok = await confirm.ask({
+    title: '删除账号',
+    message:
+      `删除 ${user.display_name}（${user.username}）？` +
+      '账号将被彻底移除、无法恢复，他也不能再登录。' +
+      '他提交过的内容会保留，但署名此后只剩编号，不可撤销。',
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+
+  try {
+    await http.delete(`/admin/users/${user.id}`)
+    detail.value = null
+    toast.ok(`已删除 ${user.username}`)
+  } catch (caught) {
+    toast.fail(caught instanceof ApiError ? caught.message : '删除失败')
+  }
+  // 成功与否都重拉：失败时也让列表回到服务端的真实状态
+  await reload()
 }
 
 /* ------------------------------------------------------------------ */
@@ -490,7 +524,7 @@ onMounted(load)
       </template>
     </SplitPane>
 
-    <UserDetailDialog :user="detail" @close="detail = null" />
+    <UserDetailDialog :user="detail" @close="detail = null" @delete="onDeleteUser" />
   </section>
 </template>
 

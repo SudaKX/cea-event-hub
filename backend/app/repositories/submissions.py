@@ -107,6 +107,21 @@ class SubmitterQuotaRepository:
             .values(used=SubmitterQuota.used - 1)
         )
 
+    def delete_for_submitter(self, session: Session, submitter: str) -> int:
+        """删掉某个提交者在**所有活动**下的计数行。
+
+        删除账号时调用。那些行没有外键承托（`submitter` 是派生字符串，不是 user_id），
+        因此不会随账号消失，需要显式清理。
+
+        留着其实也不会造成误判 —— id 不再复用之后，`u:{id}` 是个永久标识，不会再有
+        人拿到它。清理的理由是可观测性：`var/inspect_dev_db.py` 的一致性检查会把
+        "计数 N、实际 0"一直报成不符，让一个真正的一致性告警淹没在噪音里。
+        """
+        result = session.execute(
+            delete(SubmitterQuota).where(SubmitterQuota.submitter == submitter)
+        )
+        return int(result.rowcount or 0)
+
     def recompute(
         self, session: Session, event_id: str, submitter: str
     ) -> int:

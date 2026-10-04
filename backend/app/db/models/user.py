@@ -16,6 +16,19 @@ from app.db.types import UtcDateTime
 class User(Base):
     __tablename__ = "users"
 
+    # **SQLite 的 `AUTOINCREMENT` 必须写在这里。** `autoincrement=True` 是整型主键
+    # 的默认值，但它**不会**产生 `AUTOINCREMENT` 关键字 —— 没有那个关键字时，SQLite
+    # 给新行分配的 id 是 `max(id)+1`，于是删掉 id 最大的那一行之后，下一条插入会
+    # **拿回同一个 id**。
+    #
+    # 那对本项目不是小事：`submissions.submitter` 是派生字符串 `u:{user_id}`，没有
+    # 外键。id 一旦被复用，新注册的人就会从数据角度"继承"前一个被删者的提交与配额
+    # 计数，而且**没有任何报错**。删除账号这个功能因此以它为前提（design.md 决策 3）。
+    #
+    # MySQL 侧无需对应物：`AUTO_INCREMENT` 计数器自 8.0 起持久化。更老版本重启后按
+    # `max(id)+1` 重算，是迁移时的复核项，见 docs/deployment.md。
+    __table_args__ = {"sqlite_autoincrement": True}
+
     id: Mapped[int] = mapped_column(primary_key=True)
 
     # 存归一化（小写 + 去空白 + NFC）后的用户名，唯一约束建在归一化值上。

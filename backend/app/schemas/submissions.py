@@ -26,6 +26,9 @@ class SubmissionPublic(BaseModel):
     #: 审核状态码。取值与含义见 core/enums.py 的 SubmissionStatus
     status: int
     submitter: str
+    #: 可直接显示的提交者名。管理端列表填它：现存账号给显示名，账号已删除给
+    #: 「已删除用户 #N」，匿名提交维持原样。其余端点不填，前端回落到 `submitter`
+    submitter_display: str | None = None
     #: 是否来自登录用户。管理端据此区分匿名提交，而不必去解析 submitter 前缀
     from_authenticated_user: bool
     payload: dict[str, Any]
@@ -95,6 +98,7 @@ def submission_to_public(
     submission: Submission,
     *,
     files: list[SubmissionFilePublic] | None = None,
+    submitter_display: str | None = None,
 ) -> SubmissionPublic:
     return SubmissionPublic(
         id=submission.id,
@@ -102,6 +106,7 @@ def submission_to_public(
         kind=submission.kind or "_default",
         status=submission.status,
         submitter=submission.submitter,
+        submitter_display=submitter_display,
         from_authenticated_user=submission.user_id is not None,
         payload=submission.payload or {},
         created_at=submission.created_at,

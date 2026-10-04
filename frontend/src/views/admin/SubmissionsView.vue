@@ -490,10 +490,18 @@ onMounted(async () => {
                   <td class="num">
                     <div class="submitter">
                       <!--
-                        匿名标识是 `a:<uuid>`，38 个字符，远超这一列宽度，必须截断。
-                        标签不能跟着被截 —— 它才是这一列真正要看的信息。
+                        优先显示后端给的显示名：现存账号是显示名，账号已删除是
+                        「已删除用户 #N」——否则管理员面对一个悬空的 `u:7` 只能自己
+                        推断"为什么查不到人"。没有显示名时回落到原始标识
+                        （其余端点不填它）。
+
+                        匿名仍然是 `a:<uuid>` 这种 38 字符的标识，必须截断；标签不能
+                        跟着被截 —— 它才是这一列真正要看的信息。
                       -->
-                      <CellText class="submitter__id" :text="item.submitter" />
+                      <CellText
+                        class="submitter__id"
+                        :text="item.submitter_display || item.submitter"
+                      />
                       <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
                     </div>
                   </td>

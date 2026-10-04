@@ -88,6 +88,11 @@ export interface Submission {
   kind: string
   status: SubmissionStatus
   submitter: string
+  /**
+   * 可直接显示的提交者名。管理端列表会给：现存账号是显示名，账号已删除是
+   * 「已删除用户 #N」，匿名维持原样。其余端点留空，此时回落到 `submitter`。
+   */
+  submitter_display?: string | null
   from_authenticated_user: boolean
   payload: Record<string, unknown>
   created_at: string

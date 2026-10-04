@@ -41,6 +41,41 @@ class UserRepository:
         session.flush()
         return user
 
+    def delete(self, session: Session, user: User) -> None:
+        """删除账号。
+
+        会话与一次性令牌由 `ON DELETE CASCADE` 一并消失；三处审计列
+        （`events.owner_id`、`submissions.user_id`、`submissions.reviewed_by`）
+        由 `ON DELETE SET NULL` 置空 —— 也就是说**被删者创建的活动与做过的审核都还在**，
+        只是不再归属于任何人。
+
+        **提交不在这里处理。** `submissions.submitter` 是派生字符串、没有外键，因此
+        删除账号不会碰它 —— 那是刻意的：社团收集的数据不该因为一个人注销就消失
+        （design.md 决策 4）。
+        """
+        session.delete(user)
+        session.flush()
+
+    def display_names_for(
+        self, session: Session, user_ids: Sequence[int]
+    ) -> dict[int, str]:
+        """按 id 批量取显示名。**一次查询**，供管理端渲染整页提交者用。
+
+        取显示名而不是用户名：列表上要给人看的是"谁交的"，而显示名才是界面上各处
+        一直在用的那个称呼。
+
+        注意调用方要处理"查不到"的情形 —— 账号可能已被删除（`u:{id}` 在 id 不再复用
+        之后是永久标识），那时 `u:{id}` 指向一个不存在的人。
+        """
+        if not user_ids:
+            return {}
+        return {
+            user.id: user.display_name
+            for user in session.scalars(
+                select(User).where(User.id.in_(user_ids))
+            )
+        }
+
     def count(self, session: Session) -> int:
         return session.scalar(select(func.count()).select_from(User)) or 0
 
