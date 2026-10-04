@@ -44,3 +44,4 @@
 dist/**      linguist-generated
 *.lock       linguist-generated
 package-lock.json linguist-generated
+*.conf  text eol=lf
