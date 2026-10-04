@@ -1,6 +1,11 @@
 # 统一换行符，避免 Windows/Linux 协作时整文件 diff
 * text=auto
 
+# 点文件没有扩展名，落不到下面任何一条规则上，于是每次 add 都会警告
+# "LF will be replaced by CRLF"。它们同样是文本，同样该是 LF
+.env*   text eol=lf
+.gitignore text eol=lf
+
 *.py    text eol=lf
 *.ts    text eol=lf
 *.vue   text eol=lf

@@ -32,8 +32,8 @@ SKIP_CONCURRENT = "concurrent_start"
 class BootstrapOutcome:
     created: bool
     username: str
-    #: 仅当口令是本次随机生成时才有值。口令来自环境变量时为 None——
-    #: 这正是提供该环境变量的意义：不让口令进入日志。
+    #: 仅当密码是本次随机生成时才有值。密码来自环境变量时为 None——
+    #: 这正是提供该环境变量的意义：不让密码进入日志。
     generated_password: str | None = None
     skipped_reason: str | None = None
 
@@ -46,7 +46,7 @@ def ensure_bootstrap_admin(
 ) -> BootstrapOutcome:
     """用户表为空时创建管理员；否则什么都不做。
 
-    输出口令是**本函数职责的一部分**，不由调用方负责：随机口令只存在于这次
+    输出密码是**本函数职责的一部分**，不由调用方负责：随机密码只存在于这次
     返回里，调用方一旦忘记输出，账号就永久进不去了。
     """
     outcome = _create_if_empty(database, settings)
@@ -96,13 +96,13 @@ def log_bootstrap_outcome(
 ) -> None:
     """输出引导结果。
 
-    口令的输出分两种情形，这是本决策唯一需要权衡的地方：
+    密码的输出分两种情形，这是本决策唯一需要权衡的地方：
 
-    * 未设 ADMIN_INITIAL_PASSWORD -> 生成随机口令，在**创建的那一次**以告警
+    * 未设 ADMIN_INITIAL_PASSWORD -> 生成随机密码，在**创建的那一次**以告警
       级别输出，并提示立即改密
-    * 设了 ADMIN_INITIAL_PASSWORD -> 使用该值，且输出中**完全不出现口令**
+    * 设了 ADMIN_INITIAL_PASSWORD -> 使用该值，且输出中**完全不出现密码**
 
-    后者是生产环境规避口令进入日志的正式手段（日志会被采集、转发、长期保留，
+    后者是生产环境规避密码进入日志的正式手段（日志会被采集、转发、长期保留，
     不是可靠渠道）。
     """
     log = target or logger
@@ -118,8 +118,8 @@ def log_bootstrap_outcome(
 
     if outcome.generated_password is None:
         log.info(
-            "首次启动引导：已创建管理员 %r（初始口令来自环境变量，未输出）。"
-            "请登录后立即修改口令。",
+            "首次启动引导：已创建管理员 %r（初始密码来自环境变量，未输出）。"
+            "请登录后立即修改密码。",
             outcome.username,
         )
         return
@@ -129,9 +129,9 @@ def log_bootstrap_outcome(
         "======================================================================\n"
         "  首次启动引导：已创建管理员账号\n"
         "    用户名  : %s\n"
-        "    初始口令: %s\n"
-        "  该口令只显示这一次，请立即登录并修改。\n"
-        "  若不想让口令出现在日志中，请设置 ADMIN_INITIAL_PASSWORD 后重建数据库。\n"
+        "    初始密码: %s\n"
+        "  该密码只显示这一次，请立即登录并修改。\n"
+        "  若不想让密码出现在日志中，请设置 ADMIN_INITIAL_PASSWORD 后重建数据库。\n"
         "======================================================================",
         outcome.username,
         outcome.generated_password,

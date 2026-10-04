@@ -19,7 +19,16 @@ class SmtpEmailSender:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def send(self, *, to: str, subject: str, body: str) -> None:
+    def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        html: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> None:
+        # SMTP 本身没有幂等键这一说（去重要靠 Message-ID）。接受但忽略，见端口说明
         settings = self._settings
         if not settings.SMTP_HOST:
             raise RuntimeError("EMAIL_BACKEND=smtp 但未配置 SMTP_HOST")
@@ -29,6 +38,10 @@ class SmtpEmailSender:
         message["To"] = to
         message["Subject"] = subject
         message.set_content(body)
+        if html:
+            # `subtype` 必须写清楚：不写的话默认还是 text/plain，客户端会把整段
+            # HTML 当正文原样显示出来
+            message.add_alternative(html, subtype="html")
 
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as smtp:
             if settings.SMTP_STARTTLS:

@@ -96,7 +96,7 @@ class LoginRequired(DomainError):
 class InvalidCredentials(DomainError):
     code = "invalid_credentials"
     status_code = 401
-    message = "用户名或口令不正确"
+    message = "用户名或密码不正确"
 
 
 class TokenInvalid(DomainError):
@@ -153,7 +153,7 @@ class RegistrationPending(DomainError):
     与 `UsernameTaken` / `EmailTaken` 分成**不同的码**，因为二者指向完全不同的
     下一步：
 
-    - "已被注册"：换个名字，或者去登录 / 找回口令
+    - "已被注册"：换个名字，或者去登录 / 找回密码
     - "有待验证的注册"：去查收邮件，或者等它过期
 
     合并成一句会把第二种情形里的用户送去一个**根本不存在账号**的登录页 —— 他会

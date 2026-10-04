@@ -19,7 +19,7 @@ _USERNAME_MAX = 32
 
 _EMAIL_MAX = 255
 
-# 口令长度上下限。上限存在的理由不是安全而是资源：Argon2 的代价随输入增长，
+# 密码长度上下限。上限存在的理由不是安全而是资源：Argon2 的代价随输入增长，
 # 不封顶就等于给了一条廉价的 CPU 消耗路径。
 PASSWORD_MIN = 8
 PASSWORD_MAX = 128
@@ -135,11 +135,11 @@ def password_shape_error(value: str) -> str | None:
     形态，而长度才是真正有效的强度杠杆。
     """
     if not value:
-        return "口令不能为空"
+        return "密码不能为空"
     if len(value) < PASSWORD_MIN:
-        return f"口令至少 {PASSWORD_MIN} 个字符"
+        return f"密码至少 {PASSWORD_MIN} 个字符"
     if len(value) > PASSWORD_MAX:
-        return f"口令最多 {PASSWORD_MAX} 个字符"
+        return f"密码最多 {PASSWORD_MAX} 个字符"
     return None
 
 

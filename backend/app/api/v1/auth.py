@@ -1,4 +1,4 @@
-"""认证接口：注册、登录、登出、当前身份、修改口令。
+"""认证接口：注册、登录、登出、当前身份、修改密码。
 
 会话凭据只经 HttpOnly Cookie 下发（`Authorization: Bearer` 为等价路径），
 **绝不出现在响应体里**——桥接层的活动页也因此拿不到任何可复用凭据。
@@ -45,7 +45,7 @@ def _service(settings: Settings) -> AuthService:
 def _guard_auth_rate(request: Request, limiter, scope: str) -> None:
     """登录/注册/改密共用的来源维度限流。
 
-    没有这层，开放注册 + 无登录限流就等于允许在线口令爆破。
+    没有这层，开放注册 + 无登录限流就等于允许在线密码爆破。
     """
     runtime: Settings = request.app.state.settings
     limit_by_client_ip(
@@ -173,7 +173,7 @@ def me(user: RequiredUser) -> UserEnvelope:
 
 
 @router.post(
-    "/password", status_code=status.HTTP_204_NO_CONTENT, summary="修改口令"
+    "/password", status_code=status.HTTP_204_NO_CONTENT, summary="修改密码"
 )
 def change_password(
     payload: ChangePasswordRequest,
@@ -200,7 +200,7 @@ def change_password(
 @router.post(
     "/forgot-password",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="发起口令找回（自助路径）",
+    summary="发起密码找回（自助路径）",
 )
 def forgot_password(
     payload: ForgotPasswordRequest,
@@ -227,7 +227,7 @@ def forgot_password(
 @router.post(
     "/reset",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="凭一次性令牌重置口令",
+    summary="凭一次性令牌重置密码",
 )
 def reset_password(
     payload: ResetPasswordRequest,

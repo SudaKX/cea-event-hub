@@ -11,6 +11,7 @@ import logging
 from app.core.config import Settings
 from app.core.ports import EmailSender, FileStorage, RateLimiter
 from app.infra.email_console import ConsoleEmailSender
+from app.infra.email_resend import ResendEmailSender
 from app.infra.email_smtp import SmtpEmailSender
 from app.infra.ratelimit_memory import InMemoryRateLimiter
 from app.infra.storage_local import LocalDiskStorage
@@ -29,7 +30,12 @@ def build_rate_limiter(settings: Settings) -> RateLimiter:
 def build_email_sender(settings: Settings) -> EmailSender:
     """按 `EMAIL_BACKEND` 选择邮件后端。
 
-    默认 console：未配置 SMTP 时注册与找回流程仍然完整可用，只是邮件落在日志里。
+    - `console`（默认）：邮件落在日志里，开发环境不必配任何外部服务
+    - `smtp`：配置缺失时**回退**到 console —— SMTP 是可选增强，缺配置不该让服务
+      起不来
+    - `resend`：照常装配。密钥缺失时由实现自己告警，并在**每次发信**时报错 ——
+      邮件不是这个应用唯一的依赖（design.md 决策 12），不该为一个待填的密钥让整个
+      环境起不来
     """
     backend = (settings.EMAIL_BACKEND or "console").strip().lower()
     if backend == "smtp":
@@ -39,6 +45,8 @@ def build_email_sender(settings: Settings) -> EmailSender:
             )
             return ConsoleEmailSender()
         return SmtpEmailSender(settings)
+    if backend == "resend":
+        return ResendEmailSender(settings)
     return ConsoleEmailSender()
 
 
@@ -54,6 +62,7 @@ __all__ = [
     "ConsoleEmailSender",
     "InMemoryRateLimiter",
     "LocalDiskStorage",
+    "ResendEmailSender",
     "SmtpEmailSender",
     "build_email_sender",
     "build_file_storage",

@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Iterator
 
-import pytest
-from fastapi.testclient import TestClient
+# ---------------------------------------------------------------------------
+# **必须在导入 app 之前**：`app.main` 在模块级就 `create_app()`，而它会按
+# `EMAIL_BACKEND` 装配发信后端。开发者的 `.env` 里若写着 `resend`，那边就会因为
+# 没有密钥而拒绝启动 —— 于是整个测试套件在收集阶段就挂掉。
+#
+# 测试不该依赖开发者本机的邮件配置。这里强制回到 console，由 `app` 夹具再换成
+# 可捕获的替身。
+# ---------------------------------------------------------------------------
+os.environ["EMAIL_BACKEND"] = "console"
+os.environ.pop("RESEND_API_KEY", None)
 
-from app.core.config import Settings
-from app.core.ports import NullEmailSender
-from app.db.session import Database
-from app.main import create_app
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.core.config import Settings  # noqa: E402
+from app.core.ports import NullEmailSender  # noqa: E402
+from app.db.session import Database  # noqa: E402
+from app.main import create_app  # noqa: E402
 
 
 @pytest.fixture

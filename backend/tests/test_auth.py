@@ -147,6 +147,53 @@ class TestRegistration:
         assert "完成注册" in subject
         assert "/verify-registration?token=" in body
 
+    def test_the_email_carries_an_html_version_too(self, client, sent_emails) -> None:
+        """纯文本与 HTML 两个版本都要发。
+
+        只发其中一边都有代价：只发 HTML 会被反垃圾系统扣分、纯文本客户端看到一片
+        空白；只发纯文本则等于这套排版白做。链接**两边都要有** —— 它才是这封信的
+        用处所在。
+        """
+        _start_registration(client)
+        html = sent_emails.htmls[-1]
+        assert html is not None
+        assert "<html" in html
+        assert "verify-registration?token=" in html
+
+    def test_the_idempotency_key_changes_with_the_message(
+        self, client, test_db, sent_emails
+    ) -> None:
+        """幂等键必须唯一对应**那一条消息**，而不是"那一行"。
+
+        这里踩过一次：键曾经从占位行的自增 id 派生，而 `pending_registrations.id`
+        是 rowid 别名、**没有 AUTOINCREMENT** —— 一行被删掉（过期清理、或核销）之后，
+        下一行会**拿回同一个 id**。于是两封内容不同的邮件撞上同一个键，Resend 判定为
+        "改了内容的重放"直接拒掉：
+
+            This idempotency key has been used ... but the request body was modified
+
+        表现是注册接口照常返回 202、而这封信**永远发不出去**。所以键要从**消息本身**
+        取（这里用令牌摘要：每一次签发都是一条新消息），不能从行 id 取。
+        """
+        assert _start_registration(client).status_code == 202
+        first_key = sent_emails.keys[-1]
+        first_token = verification_token(sent_emails, "alice@example.com")
+
+        # 让占位消失：模拟过期后被清理（核销也是一样，行同样会没）
+        with test_db.session() as session:
+            pending = session.scalar(select(PendingRegistration))
+            assert pending is not None
+            session.delete(pending)
+
+        assert _start_registration(client).status_code == 202
+        second_key = sent_emails.keys[-1]
+        second_token = verification_token(sent_emails, "alice@example.com")
+
+        # 两条消息确实不同（令牌是新签发的）
+        assert second_token != first_token
+        # ……那么键也必须不同。相同就意味着第二封信会被服务端拒收
+        assert second_key != first_key, "幂等键不能随行 id 复用而重复"
+
     def test_password_is_never_stored_in_clear(self, client, test_db) -> None:
         _start_registration(client, password="correct-horse")
         with test_db.session() as session:

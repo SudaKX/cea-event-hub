@@ -64,13 +64,13 @@
 
 | 操作 | 端点 | 匿名 | user | admin |
 |---|---|---|---|---|
-| 注册 | `POST /auth/register` | o | o | o |
+| 注册（提交与核销两步） | `POST /auth/register[/verify]` | o | o | o |
 | 登录 / 登出 | `POST /auth/login|logout` | o | o | o |
 | 当前身份 | `GET /auth/me` | x | o | o |
-| 修改自己的口令 | `POST /auth/password` | x | o | o |
+| 修改自己的密码 | `POST /auth/password` | x | o | o |
 | 邮箱验证 | `POST /auth/verify-email[/request]` | x | o | o |
-| 自助口令找回 | `POST /auth/forgot-password` | o | o | o |
-| 凭令牌重置口令 | `POST /auth/reset` | o | o | o |
+| 自助密码找回 | `POST /auth/forgot-password` | o | o | o |
+| 凭令牌重置密码 | `POST /auth/reset` | o | o | o |
 | 用户列表与筛选 | `GET /admin/users` | x | x | o |
 | 修改角色 / 状态 / 显示名 | `PATCH /admin/users/{id}` | x | x | o |
 | 批量改角色 / 状态 | `POST /admin/users:bulk` | x | x | o |

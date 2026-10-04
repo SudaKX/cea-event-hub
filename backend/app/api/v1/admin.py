@@ -502,7 +502,7 @@ def update_user(
 @router.post(
     "/users/{user_id}/reset-token",
     response_model=ResetTokenResponse,
-    summary="为用户签发一次性口令重置令牌",
+    summary="为用户签发一次性密码重置令牌",
 )
 def issue_reset_token(
     user_id: int,
@@ -510,7 +510,7 @@ def issue_reset_token(
     admin: AdminUser,
     settings: RuntimeSettings,
 ) -> ResetTokenResponse:
-    """邮件不可用时的口令找回路径：管理员签发，线下转交。
+    """邮件不可用时的密码找回路径：管理员签发，线下转交。
 
     明文只在这个响应里出现一次。此后任何查询接口都不会返回它——库里存的是摘要。
     """

@@ -78,9 +78,26 @@ class EmailSender(Protocol):
     """邮件发送端口。
 
     提供 console 实现，使开发环境无需 SMTP 即可跑通注册、验证与找回全流程。
+
+    `body` 是**纯文本**版本，`html` 是可选的美化版本。**两个都要发**：只发 HTML
+    会被反垃圾系统扣分，而纯文本客户端的读者会看到一片空白；两半内容必须一致，
+    尤其是链接两边都得有。不支持 HTML 的实现（console）接受但忽略它。
+
+    `idempotency_key` 是给**支持它的后端**用的（目前是 Resend）：同一个键在 24
+    小时内重复投递只会真发一封。形状约定为 `<事件类型>/<实体标识>`，例如
+    `registration-pending/42`。console 与 SMTP 实现接受但忽略它 —— 端口是公共
+    形状，不该为某一个后端收窄。
     """
 
-    def send(self, *, to: str, subject: str, body: str) -> None: ...
+    def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        html: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -93,9 +110,23 @@ class NullEmailSender:
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, str, str]] = []
+        #: 与 `sent` 一一对应的幂等键，供测试断言键的位置与形状
+        self.keys: list[str | None] = []
+        #: 与 `sent` 一一对应的 HTML 版本（None 表示这封只发了纯文本）
+        self.htmls: list[str | None] = []
 
-    def send(self, *, to: str, subject: str, body: str) -> None:
+    def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        html: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> None:
         self.sent.append((to, subject, body))
+        self.keys.append(idempotency_key)
+        self.htmls.append(html)
 
 
 __all__ = [

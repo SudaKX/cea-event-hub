@@ -87,12 +87,16 @@ class Settings(BaseSettings):
     TRUSTED_PROXY_IPS: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
 
     # ---------- 邮件 ----------
-    EMAIL_BACKEND: str = "console"  # console | smtp
+    EMAIL_BACKEND: str = "console"  # console | smtp | resend
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USERNAME: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_STARTTLS: bool = True
+    # Resend 的密钥。**只从环境变量取**，绝不写进代码或提交进仓库
+    RESEND_API_KEY: str = ""
+    # `EMAIL_BACKEND=resend` 时它必须是**已验证域名**下的地址；Resend 那个
+    # `onboarding@resend.dev` 只供试发，用在生产上会被拒
     EMAIL_FROM: str = "noreply@example.com"
 
     # ---------- 找回与验证 ----------

@@ -52,6 +52,7 @@ from app.repositories.users import (
     SessionRepository,
     UserRepository,
 )
+from app.services import email_templates
 from app.services.tokens import UserTokenService
 
 logger = logging.getLogger(__name__)
@@ -230,19 +231,30 @@ class AuthService:
         token: str,
     ) -> None:
         base = self.settings.PUBLIC_BASE_URL.rstrip("/")
-        minutes = self.settings.PENDING_REGISTRATION_TTL_SECONDS // 60
+        content = email_templates.registration_email(
+            display_name=display_name,
+            link=f"{base}/verify-registration?token={token}",
+            minutes=self.settings.PENDING_REGISTRATION_TTL_SECONDS // 60,
+        )
         self._safe_send(
             email_sender,
             to=to,
-            subject="完成注册",
-            body=(
-                f"你好 {display_name}：\n\n"
-                "请打开下面的链接完成注册：\n\n"
-                f"{base}/verify-registration?token={token}\n\n"
-                f"链接 {minutes} 分钟内有效，且只能使用一次。"
-                "在链接被打开之前，账号尚未创建。\n"
-                "如果不是你发起的，忽略本邮件即可。\n"
-            ),
+            subject=content.subject,
+            body=content.text,
+            html=content.html,
+            # 键按**令牌摘要**取，不按占位行的 id —— 这里踩过一次。
+            #
+            # `pending_registrations.id` 是 rowid 别名，**没有 AUTOINCREMENT**：一行
+            # 被删掉（过期清理、或核销）之后，下一行会拿回同一个 id。于是两封内容
+            # 不同的邮件撞上同一个键，Resend 判定为"改了内容的重放"直接拒掉：
+            #
+            #   This idempotency key has been used ... but the request body was modified
+            #
+            # 表现是注册接口照常返回 202，而这封信**永远发不出去**。
+            #
+            # 令牌摘要没有这个问题：每次签发都是一条新消息，摘要随之改变；而**同一条**
+            # 消息若将来被重发（目前没有重发路径），摘要不变、正该被去重。
+            idempotency_key=f"registration-pending/{hash_token(token)}",
         )
 
     # ------------------------------------------------------------------
@@ -262,7 +274,7 @@ class AuthService:
         user = self.users.get_by_username(session, normalized)
 
         if user is None:
-            # 跑一次等价哈希，让"账号不存在"与"口令错误"耗时相当；
+            # 跑一次等价哈希，让"账号不存在"与"密码错误"耗时相当；
             # 否则响应时间的差异本身就足以枚举账号
             verify_password_dummy()
             raise InvalidCredentials()
@@ -270,7 +282,7 @@ class AuthService:
         if not verify_password(password, user.password_hash):
             raise InvalidCredentials()
 
-        # 口令校验**之后**才判断停用：这样只有本来就持有正确口令的人才会
+        # 密码校验**之后**才判断停用：这样只有本来就持有正确密码的人才会
         # 得知账号被停用，既不影响防枚举，又能给出准确的提示
         if not user.is_active:
             raise AccountDisabled()
@@ -309,7 +321,7 @@ class AuthService:
         return hash_ip(ip, self.settings.IP_HASH_SALT)
 
     # ------------------------------------------------------------------
-    # 修改口令
+    # 修改密码
     # ------------------------------------------------------------------
 
     def change_password(
@@ -322,17 +334,17 @@ class AuthService:
         current_token: str | None = None,
     ) -> None:
         if not verify_password(current_password, user.password_hash):
-            raise ValidationFailed(fields={"current_password": "原口令不正确"})
+            raise ValidationFailed(fields={"current_password": "原密码不正确"})
 
         if (problem := password_shape_error(new_password)) is not None:
             raise ValidationFailed(fields={"new_password": problem})
 
         if current_password == new_password:
-            raise ValidationFailed(fields={"new_password": "新口令不能与原口令相同"})
+            raise ValidationFailed(fields={"new_password": "新密码不能与原密码相同"})
 
         user.password_hash = hash_password(new_password)
 
-        # 其他会话立即失效：口令变更通常意味着"我怀疑有人拿到了我的凭据"
+        # 其他会话立即失效：密码变更通常意味着"我怀疑有人拿到了我的凭据"
         keep = hash_token(current_token) if current_token else None
         self.sessions.revoke_all_for_user(session, user.id, except_token_hash=keep)
 
@@ -366,18 +378,20 @@ class AuthService:
             session, user=user, purpose=TokenPurpose.PASSWORD_RESET
         )
         base = self.settings.PUBLIC_BASE_URL.rstrip("/")
-        hours = self.settings.EMAIL_TOKEN_TTL_SECONDS // 3600
+        content = email_templates.password_reset_email(
+            display_name=user.display_name,
+            link=f"{base}/reset?token={token}",
+            hours=self.settings.EMAIL_TOKEN_TTL_SECONDS // 3600,
+        )
         self._safe_send(
             email_sender,
             to=user.email or "",
-            subject="重置口令",
-            body=(
-                f"你好 {user.display_name}：\n\n"
-                "有人请求重置该账号的口令。如果这是你本人，请打开下面的链接：\n\n"
-                f"{base}/reset?token={token}\n\n"
-                f"链接 {hours} 小时内有效，且只能使用一次。"
-                "如果不是你发起的，忽略本邮件即可。\n"
-            ),
+            subject=content.subject,
+            body=content.text,
+            html=content.html,
+            # 键按**令牌摘要**取：同一张令牌重发同一封信会被去重，而重新签发
+            # 出来的新令牌是新的一封（那正是用户想要的）
+            idempotency_key=f"password-reset/{hash_token(token)}",
         )
         return token
 
@@ -410,16 +424,17 @@ class AuthService:
             session, user=user, purpose=TokenPurpose.EMAIL_VERIFY
         )
         base = self.settings.PUBLIC_BASE_URL.rstrip("/")
+        content = email_templates.email_verification_email(
+            display_name=user.display_name,
+            link=f"{base}/verify-email?token={token}",
+        )
         self._safe_send(
             email_sender,
             to=user.email,
-            subject="确认邮箱",
-            body=(
-                f"你好 {user.display_name}：\n\n"
-                "请打开下面的链接确认该邮箱地址：\n\n"
-                f"{base}/verify-email?token={token}\n\n"
-                "如果不是你发起的，忽略本邮件即可。\n"
-            ),
+            subject=content.subject,
+            body=content.text,
+            html=content.html,
+            idempotency_key=f"email-verification/{hash_token(token)}",
         )
         return token
 
@@ -454,21 +469,37 @@ class AuthService:
         expires_at = record.expires_at if record else utcnow()
 
         logger.info(
-            "管理员 %r 为用户 %r 签发了口令重置令牌", actor.username, target.username
+            "管理员 %r 为用户 %r 签发了密码重置令牌", actor.username, target.username
         )
         return target, token, expires_at
 
     @staticmethod
     def _safe_send(
-        email_sender: EmailSender, *, to: str, subject: str, body: str
+        email_sender: EmailSender,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        html: str | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         """发信失败不影响接口结果。
 
         让 SMTP 抖动变成 500 会把"邮件服务不可用"伪装成"找回功能坏了"，
         而令牌此时已经签发且有效，用户重试即可。
+
+        `html` 是可选的美化版本，与 `body` 一起发（见端口说明）。
+        `idempotency_key` 透传给支持它的后端（Resend），形状
+        `<事件类型>/<实体标识>`：同一个键在 24 小时内重复投递只真发一封。
         """
         try:
-            email_sender.send(to=to, subject=subject, body=body)
+            email_sender.send(
+                to=to,
+                subject=subject,
+                body=body,
+                html=html,
+                idempotency_key=idempotency_key,
+            )
         except Exception:
             logger.exception("发送邮件失败（收件人 %s，主题 %s）", to, subject)
 
