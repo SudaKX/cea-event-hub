@@ -107,9 +107,7 @@ async function backToForm(): Promise<void> {
 
     <form v-else class="panel auth__card" @submit.prevent="onSubmit">
       <h1 class="auth__title">CEA<span class="dim">/</span><em>注册</em></h1>
-      <p class="mute auth__lead">
-        任何人都可以注册。需要邮箱验证，验证通过后账号才会创建。
-      </p>
+      <p class="mute auth__lead">需要邮箱验证，验证通过后账号才会创建。</p>
 
       <label class="field">
         <span class="field__label">用户名</span>
@@ -118,7 +116,7 @@ async function backToForm(): Promise<void> {
       </label>
 
       <label class="field">
-        <span class="field__label">口令</span>
+        <span class="field__label">密码</span>
         <input v-model="password" type="password" autocomplete="new-password" required />
         <span class="field__hint dim">至少 8 个字符。长度比复杂度更有效。</span>
         <span v-if="fieldErrors.password" class="field__error">{{ fieldErrors.password }}</span>

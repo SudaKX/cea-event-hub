@@ -267,7 +267,7 @@ onMounted(load)
 
     <!-- 令牌明文只出现这一次 -->
     <div v-if="issued" class="panel token">
-      <h2 class="token__title">口令重置令牌<span class="dim"> · {{ issued.username }}</span></h2>
+      <h2 class="token__title">密码重置令牌<span class="dim"> · {{ issued.username }}</span></h2>
       <p class="mute token__lead">
         这串令牌**只会显示这一次**，库里只有摘要。请线下转交给本人，并提醒用后即改。
       </p>

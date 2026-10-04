@@ -48,7 +48,7 @@ async function onSubmit(): Promise<void> {
       </label>
 
       <label class="field">
-        <span class="field__label">口令</span>
+        <span class="field__label">密码</span>
         <input
           v-model="password"
           type="password"
@@ -67,7 +67,7 @@ async function onSubmit(): Promise<void> {
       <p class="mute auth__foot">
         <RouterLink to="/register">注册新账号</RouterLink>
         <span class="dim"> · </span>
-        <RouterLink to="/reset">忘记口令</RouterLink>
+        <RouterLink to="/reset">忘记密码</RouterLink>
       </p>
     </form>
   </main>

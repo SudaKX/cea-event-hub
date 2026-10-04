@@ -15,6 +15,7 @@ vi.mock('@/api/events', () => ({
 }))
 
 import HomeView from './HomeView.vue'
+import { useAuthStore } from '@/stores/auth'
 import type { EventPublic } from '@/types/api'
 
 function event(overrides: Partial<EventPublic> = {}): EventPublic {
@@ -44,6 +45,8 @@ async function mountView(events: EventPublic[] = [event()], options: { fail?: bo
       { path: '/', name: 'home', component: { template: '<div />' } },
       { path: '/:eventId', name: 'event', component: { template: '<div />' } },
       { path: '/admin/events', name: 'admin-events', component: { template: '<div />' } },
+      { path: '/login', name: 'login', component: { template: '<div />' } },
+      { path: '/register', name: 'register', component: { template: '<div />' } },
     ],
   })
   await router.push('/')
@@ -273,11 +276,58 @@ describe('失败与入口', () => {
     wrapper.unmount()
   })
 
-  it('给出管理台入口', async () => {
-    // 未登录时它会被路由守卫引到登录页，所以这里只管放上链接
+  it('未登录时给出登录、注册与管理台三个入口', async () => {
+    /*
+      之前只有"管理台" —— 它虽然也会把人引到登录页，但那要先点进去才发现。首页是
+      门面，得让人一眼看出自己能做什么。
+    */
     const wrapper = await mountView()
 
-    expect(wrapper.find('.home__admin').attributes('href')).toBe('/admin/events')
+    const links = wrapper.findAll('.home__link').map((l) => l.attributes('href'))
+    expect(links).toContain('/login')
+    expect(links).toContain('/register')
+    expect(links).toContain('/admin/events')
+    wrapper.unmount()
+  })
+
+  it('已登录的普通用户不再看到注册与管理台入口', async () => {
+    const wrapper = await mountView()
+    useAuthStore().setUser({
+      id: 1,
+      username: 'alice',
+      display_name: 'Alice',
+      role: 'user',
+      email: null,
+      email_verified: true,
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('Alice')
+    const links = wrapper.findAll('.home__link').map((l) => l.attributes('href'))
+    expect(links).not.toContain('/register')
+    // 点进去只会被守卫弹回来
+    expect(links).not.toContain('/admin/events')
+    wrapper.unmount()
+  })
+
+  it('管理员登录后仍然看得到管理台入口', async () => {
+    /*
+      隐藏规则只针对普通用户。把管理员也一并隐藏的话，他在自己的首页上找不到
+      入口 —— 而根路径本来就该是"我接下来能去哪"的地方。
+    */
+    const wrapper = await mountView()
+    useAuthStore().setUser({
+      id: 1,
+      username: 'root',
+      display_name: 'Root',
+      role: 'admin',
+      email: null,
+      email_verified: true,
+    })
+    await wrapper.vm.$nextTick()
+
+    const links = wrapper.findAll('.home__link').map((l) => l.attributes('href'))
+    expect(links).toContain('/admin/events')
     wrapper.unmount()
   })
 })

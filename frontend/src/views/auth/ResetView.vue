@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 口令重置页。
+ * 密码重置页。
  *
  * 两条签发路径共用这一个页面：
  * - 邮件可用：用户从邮件链接带 `?token=` 进来
@@ -68,11 +68,11 @@ async function onReset(): Promise<void> {
 <template>
   <main class="auth">
     <form v-if="token" class="panel auth__card" @submit.prevent="onReset">
-      <h1 class="auth__title">CEA<span class="dim">/</span><em>重置口令</em></h1>
-      <p class="mute auth__lead">设置一个新口令。链接只能使用一次。</p>
+      <h1 class="auth__title">CEA<span class="dim">/</span><em>重置密码</em></h1>
+      <p class="mute auth__lead">设置一个新密码。链接只能使用一次。</p>
 
       <label class="field">
-        <span class="field__label">新口令</span>
+        <span class="field__label">新密码</span>
         <input v-model="newPassword" type="password" autocomplete="new-password" required />
         <span v-if="fieldErrors.new_password" class="field__error">
           {{ fieldErrors.new_password }}
@@ -80,16 +80,16 @@ async function onReset(): Promise<void> {
       </label>
 
       <p v-if="error" class="alert" role="alert">{{ error }}</p>
-      <p v-if="done" class="ok">口令已更新，正在跳转到登录…</p>
+      <p v-if="done" class="ok">密码已更新，正在跳转到登录…</p>
 
       <button class="btn btn--primary" type="submit" :disabled="busy">
-        {{ busy ? '提交中…' : '设置新口令' }}
+        {{ busy ? '提交中…' : '设置新密码' }}
       </button>
       <p class="mute auth__foot"><RouterLink to="/login">返回登录</RouterLink></p>
     </form>
 
     <form v-else class="panel auth__card" @submit.prevent="onRequest">
-      <h1 class="auth__title">CEA<span class="dim">/</span><em>找回口令</em></h1>
+      <h1 class="auth__title">CEA<span class="dim">/</span><em>找回密码</em></h1>
       <p class="mute auth__lead">
         输入绑定过的邮箱，我们会发送一封含重置链接的邮件。若平台未启用邮件，
         请联系管理员签发一次性令牌。

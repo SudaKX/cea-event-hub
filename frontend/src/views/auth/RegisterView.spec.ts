@@ -85,7 +85,7 @@ describe('注册表单', () => {
     const { wrapper } = await mountRegister()
 
     await inputFor(wrapper, '用户名').setValue('alice')
-    await inputFor(wrapper, '口令').setValue('correct-horse')
+    await inputFor(wrapper, '密码').setValue('correct-horse')
     expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
 
     await inputFor(wrapper, '邮箱').setValue('alice@example.com')
@@ -105,7 +105,7 @@ describe('注册表单', () => {
     const { wrapper, router } = await mountRegister()
 
     await inputFor(wrapper, '用户名').setValue('alice')
-    await inputFor(wrapper, '口令').setValue('correct-horse')
+    await inputFor(wrapper, '密码').setValue('correct-horse')
     await inputFor(wrapper, '邮箱').setValue('alice@example.com')
     await wrapper.find('form').trigger('submit')
 
@@ -127,7 +127,7 @@ describe('注册表单', () => {
     const { wrapper, router } = await mountRegister()
 
     await inputFor(wrapper, '用户名').setValue('alice')
-    await inputFor(wrapper, '口令').setValue('correct-horse')
+    await inputFor(wrapper, '密码').setValue('correct-horse')
     await inputFor(wrapper, '邮箱').setValue('alice@example.com')
     await wrapper.find('form').trigger('submit')
     await vi.waitFor(() => expect(router.currentRoute.value.query.ongoing).toBe('1'))
@@ -160,7 +160,7 @@ describe('注册表单', () => {
     const { wrapper, router } = await mountRegister()
 
     await inputFor(wrapper, '用户名').setValue('alice')
-    await inputFor(wrapper, '口令').setValue('correct-horse')
+    await inputFor(wrapper, '密码').setValue('correct-horse')
     await inputFor(wrapper, '邮箱').setValue('alice@example.com')
     await wrapper.find('form').trigger('submit')
     await vi.waitFor(() => expect(wrapper.find('.field__error').exists()).toBe(true))

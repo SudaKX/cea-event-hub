@@ -17,9 +17,11 @@ import { ApiError } from '@/api/client'
 import { listPublicEvents } from '@/api/events'
 import elliaUrl from '@/assets/ellia.png'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
+import { useAuthStore } from '@/stores/auth'
 import type { EventPublic } from '@/types/api'
 
 const router = useRouter()
+const auth = useAuthStore()
 
 const events = ref<EventPublic[]>([])
 const loading = ref(true)
@@ -135,7 +137,29 @@ onMounted(async () => {
       </section>
 
       <p class="home__foot">
-        <RouterLink class="home__admin" :to="{ name: 'admin-events' }">管理台</RouterLink>
+        <!--
+          未登录时给**登录**入口："管理台"那个链接虽然也会把人引到登录页，但那要
+          先点进去才发现 —— 首页是门面，得让人一眼知道自己能做什么。
+
+          管理台入口对"已登录的普通用户"隐藏（点进去只会被守卫弹回来），但**对
+          管理员仍然显示** —— 否则管理员在自己的首页上找不到入口。
+        -->
+        <template v-if="!auth.isLoggedIn">
+          <RouterLink class="home__link" :to="{ name: 'login' }">登录</RouterLink>
+          <span class="dim" aria-hidden="true">·</span>
+          <RouterLink class="home__link" :to="{ name: 'register' }">注册</RouterLink>
+          <span class="dim" aria-hidden="true">·</span>
+          <RouterLink class="home__link" :to="{ name: 'admin-events' }">管理台</RouterLink>
+        </template>
+        <template v-else>
+          <span class="dim">
+            已登录：<span class="mono">{{ auth.user?.display_name }}</span>
+          </span>
+          <template v-if="auth.isAdmin">
+            <span class="dim" aria-hidden="true">·</span>
+            <RouterLink class="home__link" :to="{ name: 'admin-events' }">管理台</RouterLink>
+          </template>
+        </template>
       </p>
     </div>
   </main>
@@ -311,9 +335,14 @@ onMounted(async () => {
 
 .home__foot {
   margin: 22px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
 }
 
-.home__admin {
+.home__link {
   font-size: 12.5px;
 }
 

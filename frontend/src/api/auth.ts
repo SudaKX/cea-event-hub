@@ -69,7 +69,7 @@ export async function forgotPassword(email: string): Promise<void> {
   await http.post('/auth/forgot-password', { email })
 }
 
-/** 凭一次性令牌重置口令。两条签发路径共用这个端点。 */
+/** 凭一次性令牌重置密码。两条签发路径共用这个端点。 */
 export async function resetPassword(token: string, newPassword: string): Promise<void> {
   await http.post('/auth/reset', { token, new_password: newPassword })
 }
