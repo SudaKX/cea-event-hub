@@ -163,7 +163,27 @@ SQLite 建议用 `sqlite3 var/app.db ".backup /backup/app-$(date +%F).db"`，
 5. `alembic upgrade head` 在空库上跑一遍，确认约束名可读可删
 6. 确认 `--workers 1` 的前提是否仍然需要（限流实现若换成 Redis 则可放宽）
 
-## 已知未验证项
+## 已验证项与未验证项
 
-`deploy/nginx/cea-event-hub.conf` **尚未在本机用 `nginx -t` 校验过** —— 开发机上
-没有安装 nginx。上生产前请务必先执行 `nginx -t`。
+`deploy/nginx/cea-event-hub.conf` **已用 `nginx -t` 校验并通过**（nginx 1.24.0）。校验过程抓到一个真错误：认证限流区原来写的是 `rate=0.5r/s`，而 nginx **只接受整数速率**（`invalid rate`），"两秒一次"必须写成 `30r/m`。这份配置此前从未被验证过 —— 这条正是 `nginx -t` 存在的意义。
+
+在验证环境（WSL / Ubuntu 24.04，后端仍在 Windows 侧，经镜像网络以 `127.0.0.1:8000` 可达）里跑过、**已确认**的行为：
+
+| 检查 | 结果 |
+|---|---|
+| `/admin/events`、`/2026spring` | 200（SPA history fallback 生效，活动标识也交前端） |
+| `/data/<event>/...` | 404，响应体是 nginx 自己的页面，不泄露路径 |
+| `/api/v1/health` | **零个** `access-control-*` 头 |
+| `/content/<event>/index.html` | `access-control-allow-origin: *`；同目录下的静态数据文件同样可取 |
+| `/sdk/v1/cea.js` | 200，带 `ACAO: *` 与 `immutable` 长缓存 |
+| `/assets/<带哈希>` | 200；不存在的文件名 → 404（**不**回退到 index.html） |
+| 入口（`/admin/events`） | `Cache-Control: no-cache`，发版后不会拿到旧壳 |
+
+第二与第三行是设计决策 5 的那一对，**两侧必须在同一条链路上同时成立**，因此单独复核过：直连后端时 `/api` 同样零个 CORS 头，说明那个"没有"是后端本就不加，而不是 nginx 在剥离。
+
+**仍未验证**，上生产前请补：
+
+1. `client_max_body_size 64m` 的实际拦截 —— 只确认了指令能解析，没有真的推一个超限请求
+2. 三个 `limit_req_zone` 在真实流量下的行为与 429 响应
+3. 前置 CDN 时的 `set_real_ip_from` / `real_ip_recursive` 那一段 —— 本环境没有 CDN，**保持注释状态**
+4. `--forwarded-allow-ips` 与 `real_ip` 的取值一致性（见上文"启动参数不是可选项"）—— 只有在真实代理链路上才有意义

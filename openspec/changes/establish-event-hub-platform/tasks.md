@@ -137,7 +137,7 @@
 
 ## 15. 部署与端到端验证
 
-- [ ] 15.1 编写 nginx 站点配置：SPA history fallback、`/api` 与 `/content` 反代、`/data` 硬 404、`client_max_body_size`、`limit_req` 限流区与 `limit_req_status 429`，并以注释说明前置 CDN 时 `real_ip` 的配置要求；以 `nginx -t` 通过为验证
+- [x] 15.1 编写 nginx 站点配置：SPA history fallback、`/api` 与 `/content` 反代、`/data` 硬 404、`client_max_body_size`、`limit_req` 限流区与 `limit_req_status 429`，并以注释说明前置 CDN 时 `real_ip` 的配置要求；以 `nginx -t` 通过为验证。**已通过**（nginx 1.24.0，跑在 WSL 的 Ubuntu 24.04 里）—— 校验当场抓到一个真错误：认证限流区原写 `rate=0.5r/s`，而 nginx **只接受整数速率**（`invalid rate`），须写成 `30r/m`；这份配置此前从未被验证过。除语法外还在同一环境里跑通了不依赖后端的那几项：SPA fallback（`/admin/events` 与 `/2026spring` 均 200）、`/data` 硬 404 且响应体不泄露路径、`/sdk` 与 `/assets` 的缓存头、入口 `no-cache`，以及设计决策 5 的那一对 —— `/api` **零个** CORS 头而 `/content` 带通配 ACAO（并复核了直连后端同样零个，说明那个"没有"是后端本就不加，而非 nginx 在剥离）。未验证项（超限请求的真实拦截、限流在真实流量下的 429、CDN 的 `real_ip` 段）已逐条写进 `docs/deployment.md`
 - [x] 15.2 编写 systemd unit，以 `--workers 1 --proxy-headers --forwarded-allow-ips <nginx 地址>` 启动；以服务启动后健康检查通过、且日志中确认转发头信任配置生效为验证
 - [x] 15.3 编写部署文档：首次部署顺序（依赖 → 迁移 → 种子管理员 → 前端构建 → nginx → 服务）、单进程前提及其后果、回滚方式、以及向 MySQL 迁移的路径与需复核项；以照文档从零部署可跑通为验证
 - [x] 15.4 端到端验证 CORS 不对称：沙箱活动页能取到自身目录下的数据文件，而同一环境内直接请求 `/api/v1/**` 被浏览器阻断；以两条断言同时成立为验证
