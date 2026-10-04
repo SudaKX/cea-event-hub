@@ -392,7 +392,23 @@ DELETE FROM pending_registrations
 
 ### 决策 20：邮件用浅色正文，纯文本与 HTML 同时发，不放图
 
-三封信（注册核销、密码重置、邮箱确认）共用一套外壳，模板在 `app/services/email_templates.py` —— 纯函数，不碰数据库也不碰 Web 框架。
+三封信（注册核销、密码重置、邮箱确认）共用一套外壳。正文是**独立模板文件**（`app/templates/email/`），启动时一次读入内存；`app/services/email_templates.py` 只负责载入、替换与拼装 —— 不碰数据库，也不碰 Web 框架。
+
+**正文不写在 Python 字符串里。** 排版改一个 `border-radius` 不该需要在一堆引号之间数位置，编辑器也该给得出 HTML 高亮。于是：
+
+```
+app/templates/email/
+  shell.html                外壳：结构、配色、排版。三封信共用，只此一份
+  registration.html         正文段落（嵌进外壳的 $body）
+  registration.txt          纯文本版本
+  password_reset.html/.txt  email_verification.html/.txt
+```
+
+变量用 `string.Template` 的 `$name`，**不用 `str.format`** —— 后者要写 `{{` 与 `}}` 转义，HTML 里花括号一多就会出错。并且用 `substitute` 而不是 `safe_substitute`：模板里写错一个变量名应当当场炸出来，而不是在用户收到的信里留下一个 `$minuts`。
+
+段落样式靠**CSS 继承**省掉重复：字号/行高/颜色写在外壳那个 `<td>` 上（这几个属性可继承，各客户端都认），每段只写 `margin` —— 而那一个恰好不可继承，必须内联在每个 `<p>` 上。
+
+**模板必须放在包内。** `packages = ["app"]` 会带上非 `.py` 文件（实测 wheel 内 7 个齐全）；放到仓库根的 `templates/` 会源码跑得好好的、装成 wheel 之后找不到 —— 那种失败只出现在部署环境。**缺模板时拒绝启动**：发信失败被 `_safe_send` 吞掉、接口照常返回 202，拖到运行期才发现，表现就是"用户永远收不到信"。
 
 **浅色，而不是复刻站点的近黑底。** 站点的视觉语言是 `#0b0b0d` 底 + 品牌红，但邮件客户端对深色背景不友好：
 

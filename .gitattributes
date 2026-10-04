@@ -5,6 +5,7 @@
 # "LF will be replaced by CRLF"。它们同样是文本，同样该是 LF
 .env*   text eol=lf
 .gitignore text eol=lf
+.gitattributes text eol=lf
 
 *.py    text eol=lf
 *.ts    text eol=lf
@@ -14,6 +15,8 @@
 *.md    text eol=lf
 *.html  text eol=lf
 *.css   text eol=lf
+# 邮件的纯文本正文也是模板（app/templates/email/*.txt），一并归一
+*.txt   text eol=lf
 *.yaml  text eol=lf
 *.yml   text eol=lf
 *.toml  text eol=lf

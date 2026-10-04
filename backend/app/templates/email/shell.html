@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>$subject</title>
+</head>
+<body style="margin:0;padding:24px 12px;background:#f2f2f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#1a1a1c;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+<tr><td align="center">
+  <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;border-collapse:collapse;background:#ffffff;border:1px solid #e4e4e7;border-radius:10px;">
+    <tr><td style="padding:26px 30px 0;">
+      <p style="margin:0;font-size:12px;letter-spacing:.14em;color:#8b8e97;">CEA<span style="color:#d0202f;">/</span> 社团活动平台</p>
+    </td></tr>
+    <tr><td style="padding:16px 30px 0;">
+      <h1 style="margin:0;font-size:21px;line-height:1.45;font-weight:600;color:#1a1a1c;">$heading</h1>
+    </td></tr>
+    <!--
+      正文字号、行高与颜色写在**这一格**上，靠 CSS 继承传给下面的段落。
+      继承对这几个属性在任何客户端都成立，因此每封邮件的正文片段里只需要写
+      margin —— 而那一个恰好不可继承，必须内联在每个 <p> 上。
+    -->
+    <tr><td style="padding:14px 30px 0;font-size:14px;line-height:1.75;color:#3f4249;">
+$body
+    </td></tr>
+    <tr><td style="padding:10px 30px 0;">
+      <a href="$link" style="display:inline-block;padding:12px 22px;background:#d0202f;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:7px;">$button_label</a>
+    </td></tr>
+    <tr><td style="padding:18px 30px 0;font-size:12px;line-height:1.7;color:#8b8e97;">
+      如果按钮无法使用，请复制下方链接并在浏览器中打开：<br>
+      <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Courier New',monospace;font-size:12px;color:#3f4249;word-break:break-all;">$link</span>
+    </td></tr>
+    <tr><td style="padding:18px 30px 24px;">
+      <div style="border-top:1px solid #ececee;padding-top:14px;font-size:12px;line-height:1.7;color:#8b8e97;">
+        $footer
+      </div>
+    </td></tr>
+  </table>
+</td></tr>
+</table>
+</body>
+</html>

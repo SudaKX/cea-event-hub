@@ -1,45 +1,68 @@
-"""邮件正文模板。
+"""邮件正文模板：从磁盘读入、在内存里渲染。
 
-三封信共用一套外壳，差别只在标题、正文、按钮文案与落款。
+正文放在 `app/templates/email/` 下的**独立文件**里，而不是 Python 字符串里 —— 改
+一处排版不必在读代码时数引号，编辑器也能给 HTML 高亮；`var/preview_emails.py`
+把它们组装成完整邮件导出，可以直接在浏览器里看。
+
+每个文件的分工：
+
+```
+shell.html                  外壳：结构、配色、排版。三封信共用，只此一份
+registration.html           正文段落（嵌进外壳的 $body）
+registration.txt            纯文本版本
+```
+
+**变量用 `string.Template` 的 `$name`**，不用 `str.format` —— 后者要写 `{{` 与 `}}`
+转义，HTML 里花括号一多就非常容易出错。
 
 **浅色为主。** 站点是近黑底（`--bg: #0b0b0d`），但邮件客户端对深色背景不友好：
-Outlook（Windows）会忽略 `background-color`，于是浅色文字落在白底上几乎看不见；
-Gmail 与 Apple Mail 的暗色模式还可能把整封信自动反色。品牌感因此改由**品牌红与
-等宽字体**承担 —— 这两样在任何客户端都稳。
+Outlook（Windows）忽略 `background-color`，浅色文字落在白底上几乎看不见；Gmail 与
+Apple Mail 的暗色模式还可能整封反色。品牌感改由**品牌红与等宽字体**承担。
 
-**不放图片。** 多数客户端默认不加载远程图片，放了也只是多一个空洞；站点那套点阵
-纹理在邮件里也做不出来（不支持 `background-image`，而且项目本身禁渐变）。排版、
-颜色与一条细边已经足够。
+**不放图片。** 多数客户端默认不加载远程图片，放了只是多一个空洞；邮件里的外链请求
+本身还是个隐私面。**布局用表格**：Outlook 至今是 Word 的渲染引擎，单列卡片写成
+`div` + flex 在那边会散架。
 
-**布局用表格。** 不是为了兼容 2005 年，而是因为 Outlook 至今用 Word 的渲染引擎：
-单列卡片用 `<table>` 是最省心的写法，用 `div` + flex 在那边会散架。
-
-**这里只做字符串，不碰数据库也不碰 fastapi**（分层规则）：调用方把已经拼好的链接
-与展示名传进来，模板只负责排版。
+**这里只做字符串，不碰数据库也不碰 fastapi**（分层规则）：调用方把拼好的链接与
+展示名传进来，模板只管排版。
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from html import escape
+from pathlib import Path
+from string import Template
+from textwrap import indent
 
-#: 与前端设计令牌同源。邮件里只能用字面量 —— 客户端不认识 CSS 变量
-RED = "#d0202f"
-INK = "#1a1a1c"
-BODY = "#3f4249"
-MUTE = "#8b8e97"
-LINE = "#e4e4e7"
-SOFT_LINE = "#ececee"
-PAGE = "#f2f2f3"
+logger = logging.getLogger(__name__)
 
-FONT = (
-    "-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',"
-    "'Hiragino Sans GB','Microsoft YaHei',sans-serif"
+#: 模板目录。放在**包内**（而不是仓库根的 `templates/`），打包时才会跟着走
+TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "email"
+
+#: 需要载入的文件清单。写死而不是扫目录：漏掉一个文件应当在启动时就炸，
+#: 而不是等到某封信要发的时候
+TEMPLATE_FILES = (
+    "shell.html",
+    "registration.html",
+    "registration.txt",
+    "password_reset.html",
+    "password_reset.txt",
+    "email_verification.html",
+    "email_verification.txt",
 )
-MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Courier New',monospace"
 
-#: 邮件宽度上限。600px 是长期以来的稳妥值：再宽在阅读窗格里会被裁
-WIDTH = 600
+#: 已读入的模板。**进程内只读一次**，启动时由 `load_all()` 填满
+_cache: dict[str, str] = {}
+
+
+class TemplateMissing(RuntimeError):
+    """模板文件读不到。
+
+    这是**打包或部署**的问题，不是运行期配置问题 —— 让它在启动时就炸，好过等到有人
+    注册时才发现信发不出去。
+    """
 
 
 @dataclass(frozen=True)
@@ -55,150 +78,144 @@ class EmailContent:
     html: str
 
 
-def _shell(
-    *,
-    subject: str,
-    heading: str,
-    paragraphs: list[str],
-    button_label: str,
-    link: str,
-    footer: str,
-) -> str:
-    """套上共用外壳。
+def load_all() -> dict[str, str]:
+    """把模板全部读进内存。启动时调用一次。
 
-    `paragraphs` 与 `footer` 里的文本由调用方保证已是安全的 HTML —— 全是本模块
-    自己写的字面量。**任何来自用户的值都必须先经 `escape`**，见
-    `registration_email` 里对展示名的处理。
+    读不到就抛 `TemplateMissing`，**不吞异常**：缺模板意味着每一封邮件都发不出去，
+    而那正是"发信失败不影响接口结果"这条取舍最难查的一面（接口照常返回 202）。
     """
-    safe_link = escape(link, quote=True)
-    body = "\n".join(
-        f'<p style="margin:0 0 12px;font-size:14px;line-height:1.75;color:{BODY};">'
-        f"{paragraph}</p>"
-        for paragraph in paragraphs
+    loaded: dict[str, str] = {}
+    for name in TEMPLATE_FILES:
+        path = TEMPLATE_DIR / name
+        try:
+            # 显式 utf-8：模板里有中文，靠平台默认编码在 Windows 上会读成乱码
+            loaded[name] = path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise TemplateMissing(f"读不到邮件模板 {path}") from error
+
+    _cache.clear()
+    _cache.update(loaded)
+    logger.debug("邮件模板已载入内存：%d 个", len(loaded))
+    return loaded
+
+
+def _get(name: str) -> str:
+    """取模板。没载入过就现载一次（便于脚本与测试直接用）。"""
+    if not _cache:
+        load_all()
+    try:
+        return _cache[name]
+    except KeyError as error:  # pragma: no cover - load_all 保证了齐全
+        raise TemplateMissing(f"模板 {name} 未载入") from error
+
+
+def _fill(name: str, values: dict[str, str]) -> str:
+    """替换 `$name`。
+
+    用 `substitute` 而不是 `safe_substitute`：模板里写错一个变量名应当当场炸出来，
+    而不是在用户收到的信里留下一个 `$minuts`。
+    """
+    return Template(_get(name)).substitute(values)
+
+
+def _wrap(*, subject: str, heading: str, body: str, link: str,
+          button_label: str, footer: str) -> str:
+    """把正文段落嵌进共用外壳。"""
+    return _fill(
+        "shell.html",
+        {
+            "subject": escape(subject),
+            "heading": heading,
+            "body": indent(body.strip(), "      "),
+            "link": escape(link, quote=True),
+            "button_label": button_label,
+            "footer": footer,
+        },
     )
 
-    return f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{escape(subject)}</title>
-</head>
-<body style="margin:0;padding:24px 12px;background:{PAGE};font-family:{FONT};color:{INK};">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-<tr><td align="center">
-  <table role="presentation" width="{WIDTH}" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:{WIDTH}px;border-collapse:collapse;background:#ffffff;border:1px solid {LINE};border-radius:10px;">
-    <tr><td style="padding:26px 30px 0;">
-      <p style="margin:0;font-size:12px;letter-spacing:.14em;color:{MUTE};">CEA<span style="color:{RED};">/</span> 社团活动平台</p>
-    </td></tr>
-    <tr><td style="padding:16px 30px 0;">
-      <h1 style="margin:0;font-size:21px;line-height:1.45;font-weight:600;color:{INK};">{heading}</h1>
-    </td></tr>
-    <tr><td style="padding:14px 30px 0;">
-      {body}
-    </td></tr>
-    <tr><td style="padding:10px 30px 0;">
-      <a href="{safe_link}" style="display:inline-block;padding:12px 22px;background:{RED};color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:7px;">{button_label}</a>
-    </td></tr>
-    <tr><td style="padding:18px 30px 0;font-size:12px;line-height:1.7;color:{MUTE};">
-      按钮点不动就复制这个地址：<br>
-      <span style="font-family:{MONO};font-size:12px;color:{BODY};word-break:break-all;">{safe_link}</span>
-    </td></tr>
-    <tr><td style="padding:18px 30px 24px;">
-      <div style="border-top:1px solid {SOFT_LINE};padding-top:14px;font-size:12px;line-height:1.7;color:{MUTE};">
-        {footer}
-      </div>
-    </td></tr>
-  </table>
-</td></tr>
-</table>
-</body>
-</html>
-"""
 
-
-def registration_email(
-    *, display_name: str, link: str, minutes: int
-) -> EmailContent:
+def registration_email(*, display_name: str, link: str, minutes: int) -> EmailContent:
     """注册核销。这封信是两阶段注册的第二步所依赖的那一步。"""
-    # **展示名是用户自己填的**，进 HTML 前必须转义。纯文本时它只是排版问题，
-    # 有了 HTML 就是注入问题
-    name = escape(display_name)
     subject = "完成注册"
-    text = (
-        f"你好 {display_name}：\n\n"
-        "请打开下面的链接完成注册：\n\n"
-        f"{link}\n\n"
-        f"链接 {minutes} 分钟内有效，且只能使用一次。"
-        "在链接被打开之前，账号尚未创建。\n"
-        "如果不是你发起的，忽略本邮件即可。\n"
-    )
-    html = _shell(
+    # **展示名是用户自己填的**，进 HTML 前必须转义；纯文本那半用原始值 ——
+    # 那里 `&lt;` 会原样显示出来，反而更糟
+    html = _wrap(
         subject=subject,
         heading="完成注册",
-        paragraphs=[
-            f"你好 {name}：请点下面的按钮确认这个邮箱，账号就建好了。",
-            f"链接 <strong>{minutes} 分钟内</strong>有效，且只能使用一次。"
-            "在链接被打开之前，账号尚未创建。",
-        ],
-        button_label="完成注册",
+        body=_fill(
+            "registration.html",
+            {
+                "display_name": escape(display_name),
+                "link": escape(link, quote=True),
+                "minutes": str(minutes),
+            },
+        ),
         link=link,
+        button_label="完成注册",
         footer="不是你发起的？忽略本邮件即可，账号不会被创建。",
+    )
+    text = _fill(
+        "registration.txt",
+        {"display_name": display_name, "link": link, "minutes": str(minutes)},
     )
     return EmailContent(subject=subject, text=text, html=html)
 
 
-def password_reset_email(
-    *, display_name: str, link: str, hours: int
-) -> EmailContent:
-    """口令重置。"""
-    name = escape(display_name)
+def password_reset_email(*, display_name: str, link: str, hours: int) -> EmailContent:
+    """密码重置。"""
     subject = "重置密码"
-    text = (
-        f"你好 {display_name}：\n\n"
-        "有人请求重置该账号的密码。如果这是你本人，请打开下面的链接：\n\n"
-        f"{link}\n\n"
-        f"链接 {hours} 小时内有效，且只能使用一次。"
-        "如果不是你发起的，忽略本邮件即可。\n"
-    )
-    html = _shell(
+    html = _wrap(
         subject=subject,
         heading="重置密码",
-        paragraphs=[
-            f"你好 {name}：有人请求重置这个账号的密码。",
-            f"链接 <strong>{hours} 小时内</strong>有效，且只能使用一次。",
-        ],
-        button_label="设置新密码",
+        body=_fill(
+            "password_reset.html",
+            {
+                "display_name": escape(display_name),
+                "link": escape(link, quote=True),
+                "hours": str(hours),
+            },
+        ),
         link=link,
+        button_label="设置新密码",
         footer="不是你发起的？忽略本邮件即可，密码不会改变。",
+    )
+    text = _fill(
+        "password_reset.txt",
+        {"display_name": display_name, "link": link, "hours": str(hours)},
     )
     return EmailContent(subject=subject, text=text, html=html)
 
 
 def email_verification_email(*, display_name: str, link: str) -> EmailContent:
     """邮箱绑定验证。"""
-    name = escape(display_name)
     subject = "确认邮箱"
-    text = (
-        f"你好 {display_name}：\n\n"
-        "请打开下面的链接确认该邮箱地址：\n\n"
-        f"{link}\n\n"
-        "如果不是你发起的，忽略本邮件即可。\n"
-    )
-    html = _shell(
+    html = _wrap(
         subject=subject,
         heading="确认邮箱",
-        paragraphs=[f"你好 {name}：请点下面的按钮确认这个邮箱地址。"],
-        button_label="确认邮箱",
+        body=_fill(
+            "email_verification.html",
+            {
+                "display_name": escape(display_name),
+                "link": escape(link, quote=True),
+            },
+        ),
         link=link,
+        button_label="确认邮箱",
         footer="不是你发起的？忽略本邮件即可。",
+    )
+    text = _fill(
+        "email_verification.txt", {"display_name": display_name, "link": link}
     )
     return EmailContent(subject=subject, text=text, html=html)
 
 
 __all__ = [
+    "TEMPLATE_DIR",
+    "TEMPLATE_FILES",
     "EmailContent",
+    "TemplateMissing",
     "email_verification_email",
+    "load_all",
     "password_reset_email",
     "registration_email",
 ]

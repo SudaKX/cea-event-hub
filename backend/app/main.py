@@ -30,6 +30,7 @@ from app.infra import (
     build_rate_limiter,
 )
 from app.services.bootstrap import ensure_bootstrap_admin
+from app.services import email_templates
 from app.services.janitor import Janitor
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,11 @@ def create_app() -> FastAPI:
     app.state.rate_limiter = build_rate_limiter(settings)
     app.state.email_sender = build_email_sender(settings)
     app.state.storage = build_file_storage(settings)
+
+    # 邮件模板读进内存。放在启动路径上、且**不让异常冒过去**：缺模板是打包问题，
+    # 而它的失败模式极难查 —— 发信失败被 `_safe_send` 吞掉，接口照常返回 202，
+    # 用户看到"请查收邮件"却永远收不到。宁可起不来。
+    email_templates.load_all()
 
     # 刻意不注册 CORSMiddleware。
     # /api/** 必须不返回任何 CORS 响应头——这是沙箱隔离机制的一部分
