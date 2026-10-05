@@ -47,6 +47,7 @@ async function mountView(events: EventPublic[] = [event()], options: { fail?: bo
       { path: '/admin/events', name: 'admin-events', component: { template: '<div />' } },
       { path: '/login', name: 'login', component: { template: '<div />' } },
       { path: '/register', name: 'register', component: { template: '<div />' } },
+      { path: '/profile', name: 'profile', component: { template: '<div />' } },
     ],
   })
   await router.push('/')
@@ -124,7 +125,37 @@ describe('活动卡片区', () => {
     const wrapper = await mountView([event({ pinned: false })])
 
     expect(wrapper.find('.events').exists()).toBe(false)
-    expect(wrapper.find('.home__note').text()).toContain('没有置顶的活动')
+    /*
+      断言**整句**，不是关键词。原先这里只查 `toContain('没有置顶的活动')`，于是把
+      后半句"用上面的输入框按标识前往，或到管理台看看全部活动"删掉时它照样通过 ——
+      而那句话正是要删的东西。关键词断言在"删掉一半"这类改动面前是瞎的。
+    */
+    expect(wrapper.find('.home__note').text()).toBe('当前没有置顶的活动。')
+    wrapper.unmount()
+  })
+
+  it('标题下没有多余的说明段', async () => {
+    /*
+      原先标题下有一句"社团活动的入口。挑一个进去看看，或者到管理台创建新的活动。"
+      —— 首页自己就把该做什么说清楚了（输入框 + 活动卡片），这句只是重复，而且它把
+      "到管理台创建活动"当成所有人的选项。
+    */
+    const wrapper = await mountView()
+
+    expect(wrapper.find('.home__title').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('社团活动的入口')
+    wrapper.unmount()
+  })
+
+  it('直达输入的提示写明可以按标识或标题', async () => {
+    /*
+      看**关着**时的可见文本：那个输入框是 `v-if="searchable && open"`，面板没打开时
+      根本不存在，此刻显示的是触发按钮里的 `.select__value`。断言真实的 `placeholder`
+      属性要先点开面板，而用户没点开时看到的就是这一段字。
+    */
+    const wrapper = await mountView()
+
+    expect(wrapper.find('.select__value').text()).toBe('输入活动标识 / 标题')
     wrapper.unmount()
   })
 
@@ -307,6 +338,55 @@ describe('失败与入口', () => {
     expect(links).not.toContain('/register')
     // 点进去只会被守卫弹回来
     expect(links).not.toContain('/admin/events')
+    wrapper.unmount()
+  })
+
+  it('已登录的普通用户看得到个人中心入口', async () => {
+    /*
+      **这条是这次改动的重点之一。** 在那之前，已登录的普通成员在这页上没有任何
+      可点的东西：显示名是一行文字，"管理台"对他们隐藏 —— 于是一个刚登录的人回
+      首页后无处可去。
+    */
+    const wrapper = await mountView()
+    useAuthStore().setUser({
+      id: 1,
+      username: 'alice',
+      display_name: 'Alice',
+      role: 'user',
+      email: null,
+      email_verified: true,
+    })
+    await wrapper.vm.$nextTick()
+
+    const links = wrapper.findAll('.home__link').map((l) => l.attributes('href'))
+    expect(links).toContain('/profile')
+    wrapper.unmount()
+  })
+
+  it('管理员同时看得到个人中心与管理台入口', async () => {
+    const wrapper = await mountView()
+    useAuthStore().setUser({
+      id: 1,
+      username: 'root',
+      display_name: 'Root',
+      role: 'admin',
+      email: null,
+      email_verified: true,
+    })
+    await wrapper.vm.$nextTick()
+
+    const links = wrapper.findAll('.home__link').map((l) => l.attributes('href'))
+    expect(links).toContain('/profile')
+    expect(links).toContain('/admin/events')
+    wrapper.unmount()
+  })
+
+  it('匿名访客看不到个人中心入口', async () => {
+    // 未登录时那一栏是"登录 · 注册 · 管理台"，一个指向自己的入口都没有意义
+    const wrapper = await mountView()
+
+    const links = wrapper.findAll('.home__link').map((l) => l.attributes('href'))
+    expect(links).not.toContain('/profile')
     wrapper.unmount()
   })
 

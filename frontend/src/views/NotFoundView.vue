@@ -23,7 +23,12 @@ import DotMatrix from '@/components/ui/DotMatrix.vue'
         </p>
 
         <div class="nf__actions">
-          <RouterLink class="btn btn--primary" to="/admin">进入管理台</RouterLink>
+          <!--
+            主出口是首页：404 谁都会遇到，而管理台只对管理员开放 —— 把一个多数人
+            进不去的地方当主出口，等于让 404 变成第二道墙。管理员在首页也有管理台
+            入口，因此这里不损失什么。
+          -->
+          <RouterLink class="btn btn--primary" to="/">返回首页</RouterLink>
           <RouterLink class="btn btn--ghost" to="/login">登录</RouterLink>
         </div>
       </div>

@@ -27,6 +27,12 @@ function makeRouter(): Router {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
+      /*
+        `home` 必须在这个桩里：外壳左下角有一个"返回主页"，指向命名路由 `home`。
+        桩缺了它，`RouterLink` 解析不出 href，7 条用例会一起变红 —— 而失败信息与
+        被改的行为毫无关系（改一个按钮，红的却是"选中态"）。
+      */
+      { path: '/', name: 'home', component: { template: '<div />' } },
       {
         path: '/admin',
         component: { template: '<div />' },
@@ -137,6 +143,26 @@ describe('导航选中态', () => {
     await router.push('/admin/events/spring-2026')
     await wrapper.vm.$nextTick()
     expect(activeLabels(wrapper)).toEqual(['活动'])
+    wrapper.unmount()
+  })
+
+  it('左下角有一个回主页的出口', async () => {
+    /*
+      管理台是**另一套版式**（固定视口、没有站点页头），从书签直接进来时浏览器"后退"
+      未必能一步回到首页 —— 所以这里要有一个明确的出口，与首页那个"管理台"入口互成
+      镜像。
+
+      位置也要断言：它在 `.shell__foot` 里（侧栏底部那组），而不是混在导航项中间，
+      否则读起来像第四个管理页面。
+    */
+    const { wrapper } = await mountShell('/admin/events')
+
+    const foot = wrapper.find('.shell__foot')
+    expect(foot.exists()).toBe(true)
+
+    const home = foot.findAll('a').find((a) => a.text().includes('返回主页'))
+    expect(home, '侧栏底部没有返回主页的链接').toBeTruthy()
+    expect(home!.attributes('href')).toBe('/')
     wrapper.unmount()
   })
 

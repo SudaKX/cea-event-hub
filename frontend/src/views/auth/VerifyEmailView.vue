@@ -40,7 +40,11 @@ onMounted(async () => {
       <p v-else-if="state === 'done'" class="ok">邮箱已验证。</p>
       <p v-else class="alert" role="alert">{{ message }}</p>
 
-      <p class="mute auth__foot"><RouterLink to="/admin">进入管理台</RouterLink></p>
+      <!--
+        出口是**首页**而不是管理台：这一页可能在任何浏览器里被打开（邮件客户端
+        点进来），因此不能假设对方已登录、更不能假设他是管理员。
+      -->
+      <p class="mute auth__foot"><RouterLink to="/">返回首页</RouterLink></p>
     </div>
   </main>
 </template>

@@ -9,8 +9,10 @@ import { computed } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
+import { useSignOut } from '@/composables/useSignOut'
 
 const auth = useAuthStore()
+const { signOut } = useSignOut()
 const router = useRouter()
 const route = useRoute()
 
@@ -43,8 +45,12 @@ function isActive(name: string): boolean {
 }
 
 async function onSignOut(): Promise<void> {
-  await auth.signOut()
-  await router.push('/login')
+  /*
+    走共用的动作，而不是自己 `auth.signOut()` + 跳转 —— 那样"登出之后去哪"就有了两份
+    答案，而两份答案迟早会不一致。个人中心用的是同一个 composable。
+    `useSignOut.spec.ts` 里有一条结构性断言守着这件事。
+  */
+  await signOut()
 }
 </script>
 
@@ -75,6 +81,14 @@ async function onSignOut(): Promise<void> {
           <span class="mono">{{ auth.user?.display_name ?? '—' }}</span>
           <span class="tag">{{ auth.user?.role ?? '匿名' }}</span>
         </div>
+        <!--
+          回公开站点的出口。管理台是**另一套版式**（固定视口、没有站点页头），进去
+          之后浏览器"后退"未必能一步回到首页 —— 尤其从书签直接进来时。所以这里给
+          一个明确的出口，与首页那个"管理台"入口正好互为镜像。
+        -->
+        <RouterLink class="btn btn--ghost btn--small" :to="{ name: 'home' }">
+          返回主页
+        </RouterLink>
         <button class="btn btn--ghost btn--small" type="button" @click="onSignOut">
           退出登录
         </button>

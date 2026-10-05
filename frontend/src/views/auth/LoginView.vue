@@ -2,7 +2,9 @@
 /**
  * 登录页。
  *
- * 成功后回到 `?redirect=` 指向的原目标 —— 未登录访问管理台时由路由守卫带上。
+ * 成功后回到 `?redirect=` 指向的原目标 —— 未登录访问管理台或个人中心时由路由守卫
+ * 带上。**没有目标时进个人中心，而不是管理台**：管理台只对管理员开放，把它当默认值
+ * 对多数登录者都是错的（普通成员一登录就被挡在门外，看起来像登录失败）。
  */
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -25,7 +27,13 @@ async function onSubmit(): Promise<void> {
   try {
     await auth.signIn(username.value, password.value)
     const redirect = route.query.redirect
-    await router.push(typeof redirect === 'string' && redirect ? redirect : '/admin')
+    /*
+      原目标是**完整路径**（可能带 query），所以按字符串推；默认目标用命名路由，
+      这样路径改了也不会在这里留下一个过期的字面量。
+    */
+    await router.push(
+      typeof redirect === 'string' && redirect ? redirect : { name: 'profile' },
+    )
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '登录失败，请稍后重试'
   } finally {
@@ -40,7 +48,6 @@ async function onSubmit(): Promise<void> {
       <h1 class="auth__title">
         CEA<span class="dim">/</span><em>登录</em><span class="cursor" aria-hidden="true" />
       </h1>
-      <p class="mute auth__lead">社团活动平台管理入口。</p>
 
       <label class="field">
         <span class="field__label">用户名</span>

@@ -27,6 +27,7 @@ export const RESERVED_PREFIXES = [
   'reset',
   'verify-email',
   'verify-registration',
+  'profile',
   'api',
   'content',
   'data',
@@ -86,6 +87,19 @@ const routes: RouteRecordRaw[] = [
     name: 'verify-registration',
     component: () => import('@/views/auth/VerifyRegistrationView.vue'),
     meta: { public: true },
+  },
+  {
+    path: '/profile',
+    name: 'profile',
+    component: () => import('@/views/profile/ProfileView.vue'),
+    /*
+      需要登录。未登录访问时由守卫带上 `?redirect=/profile` 引到登录页，登录后回到
+      这里 —— 与访问管理台完全同一条路径，不引入新机制。
+
+      注意它同时出现在上面的 `RESERVED_PREFIXES` 里：只加路由的话，`/profile` 会被
+      当成标识为 profile 的活动、由活动页逻辑接管，**且不报任何错**。
+    */
+    meta: { requiresAuth: true },
   },
   {
     path: '/admin',

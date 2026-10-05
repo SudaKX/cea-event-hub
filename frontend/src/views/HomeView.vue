@@ -88,19 +88,19 @@ onMounted(async () => {
       <h1 class="home__title">
         CEA <em>活动平台</em><span class="cursor" aria-hidden="true"></span>
       </h1>
-      <p class="home__lead">
-        社团活动的入口。挑一个进去看看，或者到管理台创建新的活动。
-      </p>
 
       <!--
         按标识直达。用现成的 Select（可搜索）而不是自己搓一个 combobox：它已经
         是"输入即过滤 + 全键盘操作"，再写一个只会多一份键盘处理要维护。
+
+        提示里带上"标题"是因为它**确实**能按标题匹配：候选项的 label 是
+        `${id} — ${title}`，而 Select 是可搜索的。
       -->
       <div v-if="events.length > 0" class="home__jump">
         <Select
           :model-value="''"
           :options="jumpOptions"
-          placeholder="或直接输入活动标识 / 标题"
+          placeholder="输入活动标识 / 标题"
           searchable
           aria-label="按标识前往活动"
           @update:model-value="jump"
@@ -113,7 +113,7 @@ onMounted(async () => {
         <p v-if="loading" class="home__note dim">加载中…</p>
         <p v-else-if="error" class="home__note home__note--bad" role="alert">{{ error }}</p>
         <p v-else-if="pinnedEvents.length === 0" class="home__note dim">
-          当前没有置顶的活动。用上面的输入框按标识前往，或到管理台看看全部活动。
+          当前没有置顶的活动。
         </p>
 
         <ul v-else class="events">
@@ -141,8 +141,11 @@ onMounted(async () => {
           未登录时给**登录**入口："管理台"那个链接虽然也会把人引到登录页，但那要
           先点进去才发现 —— 首页是门面，得让人一眼知道自己能做什么。
 
-          管理台入口对"已登录的普通用户"隐藏（点进去只会被守卫弹回来），但**对
-          管理员仍然显示** —— 否则管理员在自己的首页上找不到入口。
+          已登录时给**个人中心**入口，且对任何已登录用户都给：普通成员需要一个指向
+          自己的落脚点，而在那之前他们在这里无处可去（管理台链接对非管理员隐藏，
+          点进去也只会被守卫弹回来）。
+
+          管理台入口只对管理员显示 —— 对普通用户隐藏，否则点进去只会被弹回来。
         -->
         <template v-if="!auth.isLoggedIn">
           <RouterLink class="home__link" :to="{ name: 'login' }">登录</RouterLink>
@@ -155,6 +158,8 @@ onMounted(async () => {
           <span class="dim">
             已登录：<span class="mono">{{ auth.user?.display_name }}</span>
           </span>
+          <span class="dim" aria-hidden="true">·</span>
+          <RouterLink class="home__link" :to="{ name: 'profile' }">个人中心</RouterLink>
           <template v-if="auth.isAdmin">
             <span class="dim" aria-hidden="true">·</span>
             <RouterLink class="home__link" :to="{ name: 'admin-events' }">管理台</RouterLink>
@@ -224,13 +229,6 @@ onMounted(async () => {
   100% {
     opacity: 0;
   }
-}
-
-.home__lead {
-  margin: 14px 0 0;
-  color: var(--mute);
-  font-size: clamp(13px, 1.25vw, 15px);
-  line-height: 1.8;
 }
 
 .home__jump {
