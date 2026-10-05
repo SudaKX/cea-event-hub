@@ -25,6 +25,7 @@ import SplitPane from '@/components/ui/SplitPane.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useDragSelect } from '@/composables/useDragSelect'
 import { useToast } from '@/composables/useToast'
+import SubmitterLabel from './SubmitterLabel.vue'
 import {
   SUBMISSION_STATUS,
   SUBMISSION_STATUS_OPTIONS,
@@ -488,22 +489,12 @@ onMounted(async () => {
                     行分隔线与列对齐会跟着断掉。
                   -->
                   <td class="num">
-                    <div class="submitter">
-                      <!--
-                        优先显示后端给的显示名：现存账号是显示名，账号已删除是
-                        「已删除用户 #N」——否则管理员面对一个悬空的 `u:7` 只能自己
-                        推断"为什么查不到人"。没有显示名时回落到原始标识
-                        （其余端点不填它）。
-
-                        匿名仍然是 `a:<uuid>` 这种 38 字符的标识，必须截断；标签不能
-                        跟着被截 —— 它才是这一列真正要看的信息。
-                      -->
-                      <CellText
-                        class="submitter__id"
-                        :text="item.submitter_display || item.submitter"
-                      />
-                      <span v-if="!item.from_authenticated_user" class="tag">匿名</span>
-                    </div>
+                    <!--
+                      与提交详情用**同一个**组件。这段逻辑原先在这里与详情里各写了一
+                      遍，给已删除账号补标记时只改了这里 —— 详情里那条提交仍然顶着
+                      「匿名」。现在只有一份实现，不会再漏第三处。
+                    -->
+                    <SubmitterLabel :submission="item" />
                   </td>
                   <td class="num kind-cell">
                     <CellText :text="item.kind" />
@@ -834,23 +825,13 @@ onMounted(async () => {
 }
 
 /*
-  提交者那一格：标识占满剩余宽度并被截断，标签保持完整。
-  `.submitter__id` 落在子组件根元素上 —— Vue 会把父组件的 scope 属性也加到子组件
-  根节点，所以这条规则能生效。
+  提交者那一格的样式搬去了 `SubmitterLabel.vue` —— 那一格现在是一个组件，两位调用
+  方（本页与提交详情）共用它。原先这段留在这里、靠"Vue 会把父组件的 scope 属性加到
+  子组件根节点"生效；搬走之后它就在组件自己的 `<style scoped>` 里，不再依赖那条规则。
 
-  **flex 必须套在这一层 div 上，不能直接给 `<td>`** —— 那会让它不再是 table-cell，
-  行分隔线与列对齐会跟着断掉。
+  **flex 套在组件根元素上，不能直接给 `<td>`** —— 那会让它不再是 table-cell，
+  行分隔线与列对齐会跟着断掉。`SubmissionsView.spec.ts` 有一条结构断言守着它。
 */
-.submitter {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.submitter__id {
-  flex: 1;
-  min-width: 0;
-}
 
 /* 编号做成按钮，作为键盘可达的入口。去掉按钮的外观，只留可点与焦点态 */
 .row-link {

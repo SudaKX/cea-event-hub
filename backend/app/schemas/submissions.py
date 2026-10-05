@@ -26,11 +26,19 @@ class SubmissionPublic(BaseModel):
     #: 审核状态码。取值与含义见 core/enums.py 的 SubmissionStatus
     status: int
     submitter: str
-    #: 可直接显示的提交者名。管理端列表填它：现存账号给显示名，账号已删除给
-    #: 「已删除用户 #N」，匿名提交维持原样。其余端点不填，前端回落到 `submitter`
+    #: 比 `submitter` 更可读的显示名。管理端在账号**还在**时给显示名；**为 None 表示
+    #: 没有更好的名字**（匿名的 `a:{id}`、账号已删除的 `u:{id}`），界面回落到
+    #: `submitter` 本身 —— 那串标识仍然有用，它就是筛选参数要用的值
     submitter_display: str | None = None
     #: 是否来自登录用户。管理端据此区分匿名提交，而不必去解析 submitter 前缀
     from_authenticated_user: bool
+    #: 该提交来自登录用户，**但那个账号已被删除**。
+    #:
+    #: 与"匿名"是两回事，而它们一度被混为一谈：判据曾经是 `user_id is not None`，
+    #: 而 `submissions.user_id` 是 `ON DELETE SET NULL` —— 账号一删，那条提交就
+    #: 长出了「匿名」标记，好像它是访客交的。判据因此改成 `submitter` 的前缀：
+    #: 那个字符串是刻意保留的（决策 4），不随账号删除而变。
+    submitter_deleted: bool = False
     payload: dict[str, Any]
     created_at: datetime
     files: list[SubmissionFilePublic] = []
@@ -99,6 +107,7 @@ def submission_to_public(
     *,
     files: list[SubmissionFilePublic] | None = None,
     submitter_display: str | None = None,
+    submitter_deleted: bool = False,
 ) -> SubmissionPublic:
     return SubmissionPublic(
         id=submission.id,
@@ -107,7 +116,11 @@ def submission_to_public(
         status=submission.status,
         submitter=submission.submitter,
         submitter_display=submitter_display,
-        from_authenticated_user=submission.user_id is not None,
+        # **判据是提交者标识的前缀，不是 user_id。** `submissions.user_id` 是
+        # `ON DELETE SET NULL`：账号一删它就被清空，于是那条提交会被当成匿名 ——
+        # 而 `submitter` 是刻意保留的（决策 4），不随账号删除而变
+        from_authenticated_user=submission.submitter.startswith("u:"),
+        submitter_deleted=submitter_deleted,
         payload=submission.payload or {},
         created_at=submission.created_at,
         files=files if files is not None else [],

@@ -9,6 +9,7 @@ import { computed } from 'vue'
 import { attachmentUrl } from '@/api/submissions'
 import Modal from '@/components/ui/Modal.vue'
 import { payloadDisplay, payloadJson, statusLabel, statusTone } from '@/domain/submission'
+import SubmitterLabel from './SubmitterLabel.vue'
 import type { Submission } from '@/types/api'
 
 const props = defineProps<{ submission: Submission | null }>()
@@ -40,8 +41,11 @@ function formatSize(bytes: number): string {
         <div class="detail__pair">
           <dt>提交者</dt>
           <dd class="num">
-            {{ submission.submitter }}
-            <span v-if="!submission.from_authenticated_user" class="tag">匿名</span>
+            <!--
+              与列表用**同一个**组件：这里曾经自己写了一遍"匿名"的判断，于是给已删除
+              账号补标记时只有列表跟上了，详情里那条提交仍然顶着「匿名」
+            -->
+            <SubmitterLabel :submission="submission" />
           </dd>
         </div>
         <div class="detail__pair">

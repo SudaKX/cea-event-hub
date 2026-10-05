@@ -36,6 +36,56 @@ function make(props: Record<string, unknown> = {}) {
 const dialogEl = (wrapper: ReturnType<typeof make>) =>
   wrapper.find('dialog').element as HTMLDialogElement
 
+describe('提交者那一栏', () => {
+  it('账号已删除时显示 u:{id} 加「已删除」，而不是「匿名」', () => {
+    /*
+      **这里漏过一次。** 列表与详情原先各写了一遍"匿名"的判断，给已删除账号补标记时
+      只改了列表 —— 详情里那条提交仍然顶着「匿名」。两者因此抽成同一个组件，这条
+      用例守着详情这一侧。
+    */
+    const wrapper = make({
+      submission: submission({
+        submitter: 'u:7',
+        submitter_display: null,
+        submitter_deleted: true,
+        from_authenticated_user: true,
+      }),
+    })
+
+    const cell = wrapper.find('.submitter')
+    expect(cell.find('.cell').text()).toBe('u:7')
+    expect(cell.find('.tag').text()).toBe('已删除')
+    expect(cell.find('.tag').classes()).toContain('tag--deleted')
+    expect(cell.text()).not.toContain('匿名')
+    wrapper.unmount()
+  })
+
+  it('匿名访客显示「匿名」，而不是「已删除」', () => {
+    const wrapper = make({ submission: submission() })
+
+    const cell = wrapper.find('.submitter')
+    expect(cell.find('.tag').text()).toBe('匿名')
+    expect(cell.text()).not.toContain('已删除')
+    wrapper.unmount()
+  })
+
+  it('账号仍在时显示显示名，且两个标记都不出现', () => {
+    const wrapper = make({
+      submission: submission({
+        submitter: 'u:2',
+        submitter_display: '张三',
+        submitter_deleted: false,
+        from_authenticated_user: true,
+      }),
+    })
+
+    const cell = wrapper.find('.submitter')
+    expect(cell.find('.cell').text()).toBe('张三')
+    expect(cell.find('.tag').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
 describe('开合', () => {
   it('初始关闭，且对话框始终在 DOM 里', () => {
     // showModal() 需要一个已挂载的元素，所以不能用 v-if 把它整块摘掉

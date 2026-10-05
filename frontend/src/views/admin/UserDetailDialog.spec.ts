@@ -98,7 +98,7 @@ describe('详情里的删除区域', () => {
     // 三件必须让人在点之前知道的事
     expect(text).toContain('无法恢复')
     expect(text).toContain('提交过的内容会保留')
-    expect(text).toContain(`已删除用户 #${USER.id}`)
+    expect(text).toContain('「已删除」')
     wrapper.unmount()
   })
 

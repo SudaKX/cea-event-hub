@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated
 
@@ -77,17 +78,36 @@ def _submission_service(settings, storage) -> SubmissionService:
     return SubmissionService(settings, storage)
 
 
-def _submitter_displays(session, submitters: Iterable[str]) -> dict[str, str]:
-    """把一批提交者的**可显示名字**一次查出来。
+@dataclass(frozen=True)
+class SubmitterView:
+    """一个提交者在管理端该怎么显示。"""
 
-    匿名的 `a:{client_id}` 原样返回（那本来就是给人看的）；`u:{id}` 则要看账号还在不在
-    —— 在就给显示名，不在就给「已删除用户 #N」。
+    #: 比原始标识更可读的名字；**为 None 表示没有更好的名字**，界面回落到标识本身
+    display: str | None
+    #: 该标识指向的账号已经不在了
+    deleted: bool
 
-    删除账号之后 `u:{id}` 会永久指向一个不存在的人（id 不再复用），而管理员面对一个
-    悬空的 `u:7` 只能自己推断"为什么查不到人"。**一次查询解析整页**：逐条查就是 N+1，
-    一页 50 条就是 50 次。
+
+def _resolve_submitters(
+    session, submitters: Iterable[str]
+) -> dict[str, SubmitterView]:
+    """把一批提交者**一次**查清楚：显示名，以及账号是否已被删除。
+
+    匿名的 `a:{client_id}` 原样返回、不算删除（它本来就没有账号）；`u:{id}` 则在账号
+    还在时给出显示名，账号已删时**不给名字**（界面回落到 `u:{id}` 本身），只标记为
+    已删除。
+
+    **"已删除"是标记，不是文案。** 界面用标签表达它，正文里就只留那串标识 —— 既少
+    一层重复，也让标识保持可用：它正是筛选参数要用的值。而"已删除"之所以必须是独立
+    标志，是因为它既不能靠 `user_id` 推（那是 `ON DELETE SET NULL`，账号一删就空了），
+    也不能靠显示名去匹配字符串。
+
+    **一次查询解析整页**：逐条查就是 N+1，一页 50 条就是 50 次。
     """
-    displays: dict[str, str] = {submitter: submitter for submitter in submitters}
+    views: dict[str, SubmitterView] = {
+        submitter: SubmitterView(display=submitter, deleted=False)
+        for submitter in submitters
+    }
 
     user_ids: list[int] = []
     for submitter in submitters:
@@ -99,15 +119,22 @@ def _submitter_displays(session, submitters: Iterable[str]) -> dict[str, str]:
                 continue
 
     if not user_ids:
-        return displays
+        return views
 
     found = UserRepository().display_names_for(session, sorted(set(user_ids)))
     for user_id in user_ids:
-        displays[f"u:{user_id}"] = found.get(user_id) or f"已删除用户 #{user_id}"
-    return displays
+        name = found.get(user_id)
+        views[f"u:{user_id}"] = SubmitterView(
+            # 账号没了就没什么名字可显示，交给界面回落 —— 标记会说明原因
+            display=name,
+            deleted=name is None,
+        )
+    return views
 
 
-def _render_submission(session, submission, service: SubmissionService, *, display=None):
+def _render_submission(
+    session, submission, service: SubmissionService, *, view: SubmitterView | None = None
+):
     """管理端视图：附件的类型由**字节嗅探**得出，不采信客户端声明。"""
     records = service.files.list_for_submission(session, submission.id)
     return submission_to_public(
@@ -116,7 +143,8 @@ def _render_submission(session, submission, service: SubmissionService, *, displ
             file_to_public(record, service.attachment_mime(record))
             for record in records
         ],
-        submitter_display=display,
+        submitter_display=view.display if view else None,
+        submitter_deleted=view.deleted if view else False,
     )
 
 
@@ -338,12 +366,12 @@ def list_submissions(
     ).all()
 
     # **一次**解析整页的提交者，而不是每条查一次
-    displays = _submitter_displays(session, {row.submitter for row in rows})
+    views = _resolve_submitters(session, {row.submitter for row in rows})
 
     return SubmissionListResponse(
         submissions=[
             _render_submission(
-                session, row, service, display=displays.get(row.submitter)
+                session, row, service, view=views.get(row.submitter)
             )
             for row in rows
         ],
@@ -370,10 +398,10 @@ def review_submission(
     )
     # 审核后前端会用这条响应就地更新那一行，因此显示名也得带上 —— 否则刚审核完的
     # 那一行会从"张三"回落成 `u:7`
-    displays = _submitter_displays(session, {submission.submitter})
+    views = _resolve_submitters(session, {submission.submitter})
     return SubmissionEnvelope(
         submission=_render_submission(
-            session, submission, service, display=displays.get(submission.submitter)
+            session, submission, service, view=views.get(submission.submitter)
         )
     )
 

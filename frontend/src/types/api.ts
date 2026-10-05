@@ -90,9 +90,16 @@ export interface Submission {
   submitter: string
   /**
    * 可直接显示的提交者名。管理端列表会给：现存账号是显示名，账号已删除是
-   * 「已删除用户 #N」，匿名维持原样。其余端点留空，此时回落到 `submitter`。
+   * `u:{id}` 加「已删除」标记，匿名维持原样。其余端点留空，此时回落到 `submitter`。
    */
   submitter_display?: string | null
+  /**
+   * 该提交来自登录用户，**但那个账号已被删除**。
+   *
+   * 与"匿名"是两回事，两者一度被混为一谈：判据曾是 `user_id`，而它是
+   * `ON DELETE SET NULL` —— 账号一删，那条提交就长出了「匿名」标记。
+   */
+  submitter_deleted?: boolean
   from_authenticated_user: boolean
   payload: Record<string, unknown>
   created_at: string

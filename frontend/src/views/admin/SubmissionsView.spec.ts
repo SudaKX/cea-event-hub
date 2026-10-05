@@ -63,6 +63,7 @@ function submission(id: number) {
     submitter: `a:browser-${id}`,
     // 管理端列表会给它，其余端点留空。放在默认值里，用例才能按需覆写
     submitter_display: null as string | null,
+    submitter_deleted: false,
     from_authenticated_user: false,
     payload: { name: `n${id}` },
     created_at: '2026-10-01T00:00:00Z',
@@ -664,14 +665,41 @@ describe('已删除账号的提交者显示', () => {
     wrapper.unmount()
   })
 
-  it('账号已删除时显示为「已删除用户 #N」', async () => {
+  it('账号已删除时显示为`u:{id}` 加「已删除」标记', async () => {
     const wrapper = await mountView({
       submissions: [
-        { ...submission(1), submitter: 'u:7', submitter_display: '已删除用户 #7' },
+        { ...submission(1), submitter: 'u:7', submitter_display: 'u:7' },
       ],
     })
 
-    expect(wrapper.find('.submitter .cell').text()).toBe('已删除用户 #7')
+    expect(wrapper.find('.submitter .cell').text()).toBe('u:7')
+    wrapper.unmount()
+  })
+
+  it('账号已删除时回落到 u:{id}，并打上「已删除」而不是「匿名」', async () => {
+    /*
+      这里踩过一次：判据曾是 `user_id`，而它是 `ON DELETE SET NULL` —— 账号一删，
+      那条提交就长出了「匿名」标记，好像它是访客交的。两者是两回事，因此标记必须
+      互斥。
+    */
+    const wrapper = await mountView({
+      submissions: [
+        {
+          ...submission(1),
+          submitter: 'u:7',
+          // 账号已删就没有更好的名字了 —— 后端留空，界面回落到标识\n          submitter_display: null,
+          submitter_deleted: true,
+          // 后端现在会给 true；这个用例刻意保持 true，因为提交确实来自登录用户
+          from_authenticated_user: true,
+        },
+      ],
+    })
+
+    const cell = wrapper.find('.submitter')
+    expect(cell.find('.cell').text()).toBe('u:7')
+    expect(cell.find('.tag').text()).toBe('已删除')
+    expect(cell.find('.tag').classes()).toContain('tag--deleted')
+    expect(cell.text()).not.toContain('匿名')
     wrapper.unmount()
   })
 

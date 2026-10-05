@@ -72,7 +72,7 @@ const emit = defineEmits<{ close: []; delete: [user: UserAdmin] }>()
         <p class="dim detail__note">
           账号会被彻底移除，<strong>无法恢复</strong>，他也不能再登录。
           <strong>他提交过的内容会保留</strong> —— 那是社团收集的数据，与账号是两件事；
-          但署名此后只剩编号，界面上显示为「已删除用户 #{{ user.id }}」，谁交的再也查不出来。
+          但署名此后只剩一个编号，界面上会标出「已删除」，谁交的再也查不出来。
         </p>
         <div class="detail__danger-actions">
           <button

@@ -1,6 +1,6 @@
 """已删除账号的提交者显示：任务 4.1 与 4.2。
 
-两条性质：**显示对**（现存账号给显示名、已删账号给「已删除用户 #N」、匿名原样），
+两条性质：**显示对**（现存账号给显示名、已删账号回落到 `u:{id}` 并标记为已删除、匿名原样），
 以及**解析只走一次查询**。后者是任务 4.2 要钉住的：逐条查就是 N+1，一页 50 条就是
 50 次 —— 而这种退化不会让任何"结果对不对"的断言变红，只能靠数语句。
 """
@@ -118,7 +118,7 @@ class TestDisplay:
         }
         assert displays["u:100"] == "成员0"
         assert displays["u:102"] == "成员2"
-        assert displays["u:9999"] == "已删除用户 #9999"
+        assert displays["u:9999"] is None, "账号已删就没什么名字可显示，交给界面回落"
         assert displays["a:browser-abc"] == "a:browser-abc"
 
     def test_raw_submitter_is_still_there(self, admin_client, test_db) -> None:
@@ -250,6 +250,77 @@ class TestNoNPlusOne:
         assert selects == [], selects
 
 
+class TestAuthenticationFlag:
+    """`from_authenticated_user` 的判据。
+
+    **这里踩过一次。** 判据曾经是 `submission.user_id is not None`，而
+    `submissions.user_id` 是 `ON DELETE SET NULL` —— 账号一删它就被清空，于是那条
+    提交长出了「匿名」标记，好像它是访客交的。可它与匿名是两回事：一个是访客交的，
+    一个是登录用户交的、只是那个人不在了。
+    """
+
+    def test_deleted_account_is_still_authenticated(
+        self, admin_client, test_db
+    ) -> None:
+        _seed(test_db, users=1)
+        assert admin_client.delete(f"{ADMIN}/users/100").status_code == 204
+
+        response = admin_client.get(f"{ADMIN}/events/{EVENT}/submissions")
+        item = next(
+            row for row in response.json()["submissions"] if row["submitter"] == "u:100"
+        )
+
+        # 前提：库里 user_id 确实被 SET NULL 了
+        with test_db.session() as session:
+            raw = session.execute(
+                text("SELECT user_id FROM submissions WHERE submitter = 'u:100'")
+            ).scalar()
+        assert raw is None, "前提变了：删除账号不再清空 user_id？"
+
+        assert item["from_authenticated_user"] is True, (
+            "账号被删之后那条提交被当成了匿名 —— 判据不能依赖 user_id"
+        )
+        assert item["submitter_deleted"] is True
+
+    def test_anonymous_is_not_authenticated_nor_deleted(
+        self, admin_client, test_db
+    ) -> None:
+        _seed(test_db, users=1)
+        response = admin_client.get(f"{ADMIN}/events/{EVENT}/submissions")
+        anon = next(
+            row
+            for row in response.json()["submissions"]
+            if row["submitter"] == "a:browser-abc"
+        )
+        # 访客交的：没登录过，也谈不上"账号被删"
+        assert anon["from_authenticated_user"] is False
+        assert anon["submitter_deleted"] is False
+
+    def test_live_account_is_authenticated_and_not_deleted(
+        self, admin_client, test_db
+    ) -> None:
+        _seed(test_db, users=1)
+        response = admin_client.get(f"{ADMIN}/events/{EVENT}/submissions")
+        live = next(
+            row for row in response.json()["submissions"] if row["submitter"] == "u:100"
+        )
+        assert live["from_authenticated_user"] is True
+        assert live["submitter_deleted"] is False
+
+    def test_the_two_flags_are_mutually_exclusive(
+        self, admin_client, test_db
+    ) -> None:
+        """不该出现"既匿名又已删除"这种组合 —— 那正是把两件事混起来的样子。"""
+        _seed(test_db, users=2)
+        assert admin_client.delete(f"{ADMIN}/users/100").status_code == 204
+
+        response = admin_client.get(f"{ADMIN}/events/{EVENT}/submissions")
+        for row in response.json()["submissions"]:
+            assert not (
+                row["submitter_deleted"] and not row["from_authenticated_user"]
+            ), row
+
+
 class TestDeletedAccountAfterDeletion:
     """把删除与显示接起来跑一遍：删掉之后，他的提交在列表里就不再是裸编号。"""
 
@@ -269,5 +340,5 @@ class TestDeletedAccountAfterDeletion:
             item for item in after["submissions"] if item["id"] == target["id"]
         )
         # 提交还在，只是署名不可考了
-        assert same["submitter_display"] == "已删除用户 #100"
+        assert same["submitter_display"] is None
         assert same["payload"] == target["payload"]

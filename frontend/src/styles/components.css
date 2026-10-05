@@ -319,10 +319,11 @@
 }
 
 /*
-  标签配色。后缀来自三处：
+  标签配色。后缀来自四处：
   - 活动状态：draft / live / archived
   - 提交状态码：ignored(0) / received(1) / accepted(2)，见 domain/submission.ts
   - 账号启用状态：off（停用）
+  - 提交者账号是否已删除：deleted
 
   数字不能直接进 class 名，所以状态码先经 statusTone() 映射成词。
 
@@ -336,9 +337,12 @@
   color: var(--red-hi);
 }
 
-/* 不采用 / 停用：比中性更弱，用最暗的一档，避免和正面状态抢注意力 */
+/* 不采用 / 停用 / 提交者账号已删除：比中性更弱，用最暗的一档，
+   避免和正面状态抢注意力。「已删除」与「停用」同档是刻意的：两者都是
+   "这个对象已经不可用"，而它要区别于「匿名」——那是另一回事，不是状态差 */
 .tag--ignored,
-.tag--off {
+.tag--off,
+.tag--deleted {
   border-color: var(--line-strong);
   color: var(--dim);
 }
