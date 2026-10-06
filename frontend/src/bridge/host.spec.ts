@@ -75,6 +75,13 @@ function makeHost(
     withoutConfirm?: boolean
     /** 这些操作会被挂起（走拦截口子），其余照常转发 */
     holdOps?: string[]
+    /**
+     * 宿主交给桥接层的活动标识。默认 `spring-2026`。
+     *
+     * 可覆盖是为了测**大小写归一化**：地址栏里可以写大写，而桥接层下游（初始化
+     * 消息、活动信息、提交、存储命名空间）必须一律看到规范形态。
+     */
+    eventId?: string
   } = {},
 ): Harness {
   const iframe = makeIframe()
@@ -100,7 +107,7 @@ function makeHost(
 
   const host = new BridgeHost({
     iframe,
-    eventId: () => 'spring-2026',
+    eventId: () => options.eventId ?? 'spring-2026',
     apiBase: '/api/v1',
     contentBase: '/content',
     identity: () => ({
@@ -1081,5 +1088,94 @@ describe('拦截口子：挂起与结算', () => {
     expect(getPublicEvent).toHaveBeenCalledTimes(1)
     const result = harness.sent.find((message) => message.id === 'r-plain')
     expect((result?.payload as { ok?: boolean }).ok).toBe(true)
+  })
+})
+
+describe('活动标识的大小写归一化', () => {
+  /**
+   * 代表值。完整样本表在 `eventId.spec.ts`，与后端 `tests/test_text.py` 共用同一份
+   * 内容 —— 这里只取一个混合大小写的值，验证"归一化确实作用到了下游"。
+   */
+  const RAW = 'Spring-2026'
+  const CANONICAL = 'spring-2026'
+
+  function ready(harness: Harness): void {
+    harness.host.start()
+    postFrom(harness.iframe.contentWindow, {
+      v: PROTOCOL_VERSION,
+      type: IFRAME_MESSAGE.READY,
+      payload: { protocolVersion: PROTOCOL_VERSION },
+    })
+    harness.sent.length = 0
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    window.localStorage.clear()
+    getPublicEvent.mockResolvedValue(EVENT)
+  })
+
+  it('初始化消息里的标识是规范形态', () => {
+    const harness = makeHost({ eventId: RAW })
+    harness.host.start()
+
+    postFrom(harness.iframe.contentWindow, {
+      v: PROTOCOL_VERSION,
+      type: IFRAME_MESSAGE.READY,
+      payload: { protocolVersion: PROTOCOL_VERSION },
+    })
+
+    // 活动页可以把 init 里的标识当稳定身份用，不必担心同一个人经由不同大小写进入
+    // 时拿到两个不同的值
+    const init = harness.sent.find((message) => message.type === HOST_MESSAGE.INIT)
+    expect(init?.payload).toMatchObject({ eventId: CANONICAL })
+  })
+
+  it('活动信息按规范形态请求', async () => {
+    const harness = makeHost({ eventId: RAW })
+    ready(harness)
+
+    rpc(harness, BRIDGE_OP.EVENT_INFO)
+    await flush()
+
+    expect(getPublicEvent).toHaveBeenCalledWith(CANONICAL)
+  })
+
+  it('提交按规范形态发往后端', async () => {
+    submitApi.mockResolvedValue({ submission: { id: 1 }, deduplicated: false })
+    const harness = makeHost({ eventId: RAW })
+    ready(harness)
+
+    rpc(harness, BRIDGE_OP.FORM_SUBMIT, {
+      payload: { n: 1 },
+      kind: 'apply',
+      idempotencyKey: 'k1',
+    })
+    await flush()
+
+    expect(submitApi.mock.calls[0]?.[0]).toBe(CANONICAL)
+  })
+
+  it('存储命名空间用规范形态 —— 大写地址存下的草稿，规范形态地址读得回', async () => {
+    // 在"大写地址"下保存草稿
+    const upper = makeHost({ eventId: RAW })
+    ready(upper)
+    rpc(upper, BRIDGE_OP.STORAGE_SAVE, { key: 'draft', value: { n: 1 } })
+    await flush()
+
+    // 键只落在规范形态的命名空间里 —— 否则同一活动会有两份草稿
+    expect(
+      window.localStorage.getItem(`cea.storage:${CANONICAL}:draft`),
+    ).not.toBeNull()
+    expect(window.localStorage.getItem(`cea.storage:${RAW}:draft`)).toBeNull()
+
+    // 再从"规范形态地址"读回：另一个宿主实例，模拟另一次进入
+    const lower = makeHost({ eventId: CANONICAL })
+    ready(lower)
+    rpc(lower, BRIDGE_OP.STORAGE_LOAD, { key: 'draft' })
+    await flush()
+
+    const result = lower.sent.find((message) => message.type === HOST_MESSAGE.RESULT)
+    expect(result?.payload).toMatchObject({ ok: true, data: { n: 1 } })
   })
 })

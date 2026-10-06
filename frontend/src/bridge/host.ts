@@ -31,6 +31,7 @@ import {
   type RpcRequestPayload,
   type RpcResultPayload,
 } from './protocol'
+import { normalizeEventId } from './eventId'
 import type { EventPublic } from '@/types/api'
 
 export interface BridgeHostOptions {  iframe: HTMLIFrameElement
@@ -481,6 +482,20 @@ export class BridgeHost {
     return Object.values(BRIDGE_OP).includes(op as never)
   }
 
+  /**
+   * 交给下游的活动标识 —— **一律是规范形态**。
+   *
+   * 归一化只在这一个地方做，下游（初始化消息、活动信息、提交、存储命名空间）全部
+   * 走它。分散到各个调用点会有漏掉的风险，而最可能被漏掉的恰好是存储命名空间：
+   * 它的症状是"草稿凭空消失"，与大小写这个起因看起来毫无关系。
+   *
+   * 注意**不能**改成"等活动信息到手后用响应里的 `event.id`"：活动页可以在 `CEA.ready`
+   * 之后立刻读写存储，那时活动信息还没到手，命名空间必须已经是对的。
+   */
+  private canonicalEventId(): string {
+    return normalizeEventId(this.options.eventId())
+  }
+
   private async dispatch(
     op: string,
     args: Record<string, unknown>,
@@ -488,7 +503,7 @@ export class BridgeHost {
     controller: AbortController,
   ): Promise<unknown> {
     // 注意：**活动标识来自宿主自身**，args 里即便带了 event_id 也会被忽略
-    const eventId = this.options.eventId()
+    const eventId = this.canonicalEventId()
 
     switch (op) {
       case BRIDGE_OP.EVENT_INFO:
@@ -555,7 +570,7 @@ export class BridgeHost {
   private loadEvent(): Promise<EventPublic> {
     if (this.eventCache) return Promise.resolve(this.eventCache)
     if (!this.eventPromise) {
-      this.eventPromise = getPublicEvent(this.options.eventId())
+      this.eventPromise = getPublicEvent(this.canonicalEventId())
         .then((event) => {
           this.eventCache = event
           return event
@@ -662,7 +677,7 @@ export class BridgeHost {
   private sendInit(): void {
     const payload: InitPayload = {
       protocolVersion: PROTOCOL_VERSION,
-      eventId: this.options.eventId(),
+      eventId: this.canonicalEventId(),
       apiBase: this.options.apiBase,
       contentBase: this.options.contentBase,
       // 身份描述符**不含任何凭据**：只有登录状态、展示信息与匿名标识

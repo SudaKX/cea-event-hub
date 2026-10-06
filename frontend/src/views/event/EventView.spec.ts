@@ -73,18 +73,18 @@ function makeRouter() {
   })
 }
 
-async function mountView() {
+async function mountView(eventId = 'spring-2026') {
   const api = deferred<typeof EVENT>()
   const probe = deferred<boolean>()
   getPublicEvent.mockReturnValue(api.promise)
   contentEntryExists.mockReturnValue(probe.promise)
 
   const router = makeRouter()
-  await router.push('/spring-2026')
+  await router.push(`/${eventId}`)
   await router.isReady()
 
   const wrapper = mount(EventView, {
-    props: { eventId: 'spring-2026' },
+    props: { eventId },
     global: { plugins: [router, createPinia()] },
     attachTo: document.body,
   })
@@ -336,5 +336,37 @@ describe('活动页的提示', () => {
     } finally {
       useToast().clear()
     }
+  })
+})
+
+describe('活动标识的大小写', () => {
+  /**
+   * 见 openspec/changes/case-insensitive-event-ids/。这一组钉住**前端侧的两个边界**：
+   *
+   *   - 内容地址必须用**接口返回的**规范标识拼，而不是地址栏里的形态
+   *   - 地址栏的形态**不被改写**（不重定向到小写）
+   *
+   * 前者是 `/content/**` 在 Linux 上区分大小写的直接后果：拼错了就是 404，
+   * 而活动页打不开的原因看起来与大小写毫无关系。后者是本变更的目的所在。
+   */
+
+  it('内容地址用响应里的规范标识，而不是地址栏里的形态', async () => {
+    // 地址栏写大写，接口照例返回规范形态（后端会归一化）
+    const { wrapper, settle } = await mountView('Spring-2026')
+    await settle()
+
+    expect(wrapper.find('iframe').attributes('src')).toBe(
+      '/content/spring-2026/index.html?v=3',
+    )
+    wrapper.unmount()
+  })
+
+  it('地址栏形态不被改写（无重定向）', async () => {
+    const { router, wrapper, settle } = await mountView('Spring-2026')
+    await settle()
+
+    expect(router.currentRoute.value.path).toBe('/Spring-2026')
+    expect(router.currentRoute.value.params.eventId).toBe('Spring-2026')
+    wrapper.unmount()
   })
 })
