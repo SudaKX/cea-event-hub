@@ -49,6 +49,10 @@ class TestNamingConvention:
             "submitter_quotas",
             # 待验证的注册占位。注册分两阶段，这张表就是"已提交但还没验证"那一半
             "pending_registrations",
+            # 邀请码：准入的载体、使用记录，以及平台级运行时开关
+            "invitation_codes",
+            "invitation_redemptions",
+            "platform_switches",
         }
 
     def test_index_names_are_conventional(self) -> None:
@@ -76,6 +80,9 @@ class TestNamingConvention:
             "uq_pending_registrations_username",
             "uq_pending_registrations_email",
             "uq_pending_registrations_token_hash",
+            # 邀请码的 token 必须唯一：它是注册时手输的那一串，重复就意味着两个人
+            # 拿着同一个码，而"谁邀请了他"从此说不清
+            "uq_invitation_codes_token",
         }
         # sessions.token_hash 是主键而非唯一约束，因此不产生 uq_
         assert "pk_sessions" in {t.primary_key.name for t in Base.metadata.sorted_tables}

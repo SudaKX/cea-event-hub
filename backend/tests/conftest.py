@@ -128,12 +128,72 @@ def verification_token(sender: NullEmailSender, to: str) -> str:
     raise AssertionError(f"没有发给 {to} 的邮件：{sender.sent}")
 
 
+def make_invitation_code(
+    database, *, max_uses: int = 1, days: int = 7, token: str | None = None
+) -> str:
+    """造一张可用的邀请码，返回它的 token。
+
+    **注册现在必须持码**，因此凡是要走到注册第一步的测试都需要一张。这是模块级
+    函数而不是夹具，因为有一批测试用**模块级辅助函数**直接打注册端点（它们要观察
+    第一步本身的行为，不走走完两步的夹具），而那些辅助函数拿不到夹具。
+
+    直接走仓储而不是管理端接口：这些用例要的是"有一张能用的码"，不是"管理员能建码"
+    （后者由 `test_invitations.py` 覆盖）。
+    """
+    from datetime import timedelta
+
+    from app.core.clock import utcnow
+    from app.core.security import generate_invitation_token
+    from app.db.models import InvitationCode
+    from app.repositories.invitations import InvitationRepository
+
+    value = token or generate_invitation_token()
+    with database.session() as session:
+        InvitationRepository().add(
+            session,
+            InvitationCode(
+                token=value,
+                name="测试用",
+                owner_id=None,
+                max_uses=max_uses,
+                used_count=0,
+                expires_at=utcnow() + timedelta(days=days),
+            ),
+        )
+    return value
+
+
+def invitation_code_for(client, **kwargs: object) -> str:
+    """给某个测试客户端造一张码。
+
+    从**它自己的 app** 取库，因此模块级辅助函数（拿不到夹具的那些）也能用。这是
+    `make_invitation_code` 的客户端版本，存在的理由只有一个：让补码这件事在调用点
+    写成一行。
+    """
+    return make_invitation_code(client.app.state.database, **kwargs)  # type: ignore[arg-type]
+
+
 @pytest.fixture
-def register(client, sent_emails):
+def invitation_code(test_db) -> str:
+    """夹具形态：`invitation_code()` 每次给一张新的码。"""
+
+    def _make(*, max_uses: int = 1, days: int = 7, token: str | None = None) -> str:
+        return make_invitation_code(
+            test_db, max_uses=max_uses, days=days, token=token
+        )
+
+    return _make
+
+
+@pytest.fixture
+def register(client, sent_emails, invitation_code):
     """走完两阶段注册，返回**最后一步**（核销）的响应。
 
     注册不再是"一次请求建号"，因此凡是要造出一个真实用户的测试都得走两步。把它
     收成一个夹具，改动就集中在这里，而不是散落到每个用例里。
+
+    **邀请码由夹具自动补一张**（除非调用方自己传 `invitation_code=`）。这样既有用例
+    一处都不用改，而邀请码本身的用例仍能指定具体的那张（包括传一个无效的）。
     """
 
     def _register(
@@ -142,6 +202,7 @@ def register(client, sent_emails):
         username: str = "alice",
         password: str = "correct-horse",
         email: str | None = None,
+        invitation_code: str | None = None,
         **extra: object,
     ):
         address = email or f"{username.strip().lower()}@example.com"
@@ -151,6 +212,7 @@ def register(client, sent_emails):
                 "username": username,
                 "password": password,
                 "email": address,
+                "invitation_code": invitation_code or _fresh_code(),
                 **extra,
             },
         )
@@ -160,6 +222,11 @@ def register(client, sent_emails):
             "/api/v1/auth/register/verify",
             json={"token": verification_token(sent_emails, address)},
         )
+
+    def _fresh_code() -> str:
+        # 每次注册用一张**新的**码：一次一用的码在第二次注册时会失败，而夹具的语义
+        # 是"造出一个用户"，不该被邀请码的次数绊住
+        return invitation_code()
 
     return _register
 

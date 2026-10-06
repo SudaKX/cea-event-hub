@@ -21,6 +21,7 @@ from app.core.deps import (
     request_client_ip,
     request_user_agent,
 )
+from app.core.exceptions import InvitationInvalid, ValidationFailed
 from app.schemas import UserPublic
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -93,17 +94,25 @@ def register(
     """建立待验证占位并发信。**账号此时并不存在。**
 
     202 而不是 201：这一步只受理了请求，资源（账号）要到邮件链接被打开才创建。
+
+    **邀请码不合格时落在字段上。** 失败提示对"不存在 / 已过期 / 已用尽 / 平台暂停"
+    完全一致 —— 区分原因等于把这个匿名接口变成邀请码枚举器（design.md 决策 5）。
     """
     _guard_auth_rate(request, limiter, "register")
 
-    ongoing = _service(settings).request_registration(
-        session,
-        username=payload.username,
-        email=payload.email,
-        password=payload.password,
-        display_name=payload.display_name,
-        email_sender=email_sender,
-    )
+    try:
+        ongoing = _service(settings).request_registration(
+            session,
+            username=payload.username,
+            email=payload.email,
+            password=payload.password,
+            display_name=payload.display_name,
+            invitation_code=payload.invitation_code,
+            email_sender=email_sender,
+        )
+    except InvitationInvalid:
+        # 转成字段错误，让前端把它显示在邀请码输入框下面。消息保持**逐字相同**
+        raise ValidationFailed(fields={"invitation_code": "邀请码不可用"}) from None
     return RegistrationPendingResponse(ongoing=ongoing)
 
 

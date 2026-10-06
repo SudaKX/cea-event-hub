@@ -147,6 +147,53 @@ class EmailTaken(DomainError):
     message = "该邮箱已被绑定"
 
 
+class InvitationInvalid(DomainError):
+    """邀请码不可用 —— **不区分具体原因**。
+
+    不存在、已过期、已失效、已用尽，以及平台正处于"暂停邀请"，全部归到这一个错误
+    与同一句提示。**这不是偷懒，是边界。**
+
+    注册接口匿名可达。若它区分原因，任何人都能拿它当校验器：先枚举出"存在"的码，
+    再挑"未用尽"的。区分原因会把邀请码这道门槛变成一次可离线完成的枚举 —— 而且
+    失效时**没有任何报错**，只会表现为"有人总能拿到码"（design.md 决策 5）。
+
+    同理，暂停期间也返回这一句：否则平台状态本身成了可探测的信息。
+    """
+
+    code = "invitation_invalid"
+    status_code = 400
+    message = "邀请码不可用"
+
+
+class InvitationQuota(DomainError):
+    """申请邀请码超出额度。
+
+    与 `InvitationInvalid` 分开是**安全的**：这条错误只出现在"已登录用户申请自己的
+    码"这个路径上，而那条路径需要身份，因此不构成匿名可用的校验器。这里把原因说清楚
+    （已经有一张没用完 / 24 小时内申请过）对用户是有用的，也不会泄露任何别人的码。
+    """
+
+    code = "invitation_quota"
+    status_code = 409
+    message = "暂时不能申请新的邀请码"
+
+
+class InvitationIssuancePaused(DomainError):
+    """平台暂停了邀请码申请。"""
+
+    code = "invitation_issuance_paused"
+    status_code = 409
+    message = "平台当前暂停发放邀请码"
+
+
+class InvitationNotDeletable(DomainError):
+    """已使用过的码不能删除 —— 使用记录要留住归属。"""
+
+    code = "invitation_not_deletable"
+    status_code = 409
+    message = "已经使用过的邀请码不能删除"
+
+
 class RegistrationPending(DomainError):
     """该用户名或邮箱已被一条**待验证的注册**占着。
 

@@ -855,6 +855,8 @@ class TestJanitor:
         client.post(
             "/api/v1/auth/register",
             json={
+                # 注册现在必须持码；这里只关心占位被清理，因此造一张即可
+                "invitation_code": invitation_code_for(client),
                 "username": "alice",
                 "password": "correct-horse",
                 "email": "alice@example.com",
@@ -875,6 +877,7 @@ class TestJanitor:
             client.post(
                 "/api/v1/auth/register",
                 json={
+                    "invitation_code": invitation_code_for(client),
                     "username": "alice",
                     "password": "correct-horse",
                     "email": "alice@example.com",
@@ -1093,3 +1096,4 @@ class TestMySubmissions:
 
 
 from app.db.models import User  # noqa: E402  （放在末尾以配合上面的夹具使用）
+from conftest import invitation_code_for

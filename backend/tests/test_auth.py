@@ -21,6 +21,7 @@ from app.core.security import (
     verify_password,
 )
 from app.db.models import PendingRegistration, User, UserSession
+from conftest import invitation_code_for
 from tests.conftest import verification_token
 
 API = "/api/v1"
@@ -38,6 +39,8 @@ def _start_registration(client, username="alice", password="correct-horse", **ex
     return client.post(
         f"{API}/auth/register",
         json={
+            # 注册现在必须持码；这个辅助函数只走第一步，所以自己造一张
+            "invitation_code": invitation_code_for(client),
             "username": username,
             "password": password,
             "email": extra.pop("email", f"{username.strip().lower()}@example.com"),

@@ -16,6 +16,7 @@ from app.db.models import User, UserToken
 from app.infra import build_email_sender
 from app.infra.email_console import ConsoleEmailSender
 from app.services.tokens import UserTokenService
+from conftest import invitation_code_for
 
 API = "/api/v1"
 TOKEN_IN_BODY = re.compile(r"token=([A-Za-z0-9_\-]+)")
@@ -46,6 +47,8 @@ def _register(client, username="alice", password="correct-horse", **extra):
     return client.post(
         f"{API}/auth/register",
         json={
+            # 注册现在必须持码（见 conftest 的 make_invitation_code）
+            "invitation_code": invitation_code_for(client),
             "username": username,
             "password": password,
             "email": extra.pop("email", f"{username.strip().lower()}@example.com"),

@@ -17,6 +17,10 @@ class RegisterRequest(BaseModel):
     # **必填**：注册要经邮箱验证才算完成，而验证的对象就是它。没有"仅凭用户名
     # 注册"的降级路径
     email: str = Field(min_length=1, max_length=255)
+    # 邀请码。**服务端把它当必填**（空值一律拒绝），这里标成可选只为让"缺字段"与
+    # "字段无效"落到同一个错误上 —— 否则 pydantic 会先给出一个措辞不同的 422，
+    # 而那正好泄露了"这一项是必填的"以外的信息，也与"提示不区分原因"不一致。
+    invitation_code: str | None = Field(default=None, max_length=64)
 
 
 class RegistrationPendingResponse(BaseModel):

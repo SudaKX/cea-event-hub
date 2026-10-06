@@ -150,6 +150,16 @@ class PendingRegistration(Base):
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
 
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+
+    # 这次注册用的是哪张邀请码。**核销时必须知道它**：到第二步时用户手里只有邮件里的
+    # 令牌，没有那串码，所以码必须在第一阶段就记下来（design.md 决策 1）。
+    #
+    # 可空以兼容升级：升级之前建立的占位没有码，它们仍应能正常核销 —— 准入是在
+    # "提交注册"那一刻判定的，不该回头把已经在等邮件的人挡掉。
+    invitation_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("invitation_codes.id", ondelete="SET NULL"), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=utcnow
     )

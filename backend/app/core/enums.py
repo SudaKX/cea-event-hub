@@ -18,6 +18,19 @@ class UserRole(StrEnum):
     ADMIN = "admin"
 
 
+class PlatformSwitchKey(StrEnum):
+    """平台级运行时开关的名字。
+
+    取值是**对外契约的一部分**（它们存在数据库里、由管理端改），改动必须配迁移。
+    没有对应的行就等于关闭 —— 见 `db/models/platform.py`。
+    """
+
+    #: 暂停邀请：拒绝**一切**邀请码校验，包括此前已经发出的。应急刹车
+    INVITATIONS_PAUSED = "invitations_paused"
+    #: 暂停申请：普通用户不能再申请新码，已发出的码照常可用
+    INVITATION_ISSUANCE_PAUSED = "invitation_issuance_paused"
+
+
 class EventStatus(StrEnum):
     DRAFT = "draft"
     LIVE = "live"

@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 from app.db.models.event import Event
+from app.db.models.invitation import InvitationCode, InvitationRedemption
+from app.db.models.platform import PlatformSwitch
 from app.db.models.submission import Submission, SubmissionFile, SubmitterQuota
 from app.db.models.user import (
     PendingRegistration,
@@ -17,7 +19,10 @@ from app.db.models.user import (
 
 __all__ = [
     "Event",
+    "InvitationCode",
+    "InvitationRedemption",
     "PendingRegistration",
+    "PlatformSwitch",
     "Submission",
     "SubmissionFile",
     "SubmitterQuota",

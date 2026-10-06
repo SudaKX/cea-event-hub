@@ -5,11 +5,17 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import BigInteger, DateTime, String, inspect
+from sqlalchemy import BigInteger, DateTime, String, inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.enums import EventStatus, UserRole
-from app.db.models import Event, Submission, User
+from app.db.models import (
+    Event,
+    InvitationCode,
+    InvitationRedemption,
+    Submission,
+    User,
+)
 from app.db.session import Database
 from app.db.types import UtcDateTime
 
@@ -235,3 +241,116 @@ class TestUtcDateTimeRoundTrip:
             event = session.get(Event, "spring-2026")
         assert event is not None
         assert event.updated_at >= before
+
+
+def _code(token: str = "INVITE01", **overrides: object) -> InvitationCode:
+    defaults: dict[str, object] = {
+        "token": token,
+        "name": "给张三",
+        "owner_id": None,
+        "max_uses": 1,
+        "used_count": 0,
+        "expires_at": datetime.now(UTC) + timedelta(days=7),
+    }
+    defaults.update(overrides)
+    return InvitationCode(**defaults)  # type: ignore[arg-type]
+
+
+class TestInvitationSchema:
+    """邀请码两张表的形状（任务 1.1 / 1.2）。"""
+
+    def test_tables_are_created(self, test_db: Database) -> None:
+        names = set(inspect(test_db.engine).get_table_names())
+        assert {"invitation_codes", "invitation_redemptions", "platform_switches"} <= names
+
+    def test_defaults(self, test_db: Database) -> None:
+        with test_db.session() as session:
+            session.add(_code())
+        with test_db.session() as session:
+            code = session.scalars(select(InvitationCode)).one()
+        # 一次一用、还没用过、还没被作废
+        assert code.max_uses == 1
+        assert code.used_count == 0
+        assert code.revoked_at is None
+        assert code.created_at.tzinfo is not None
+
+    def test_token_is_unique(self, test_db: Database) -> None:
+        with test_db.session() as session:
+            session.add(_code("SAME"))
+        with pytest.raises(IntegrityError):
+            with test_db.session() as session:
+                session.add(_code("SAME", name="另一个名字"))
+
+    def test_owner_is_optional(self, test_db: Database) -> None:
+        """空 owner 就是**平台码** —— 管理员建的码不归任何个人（design.md 决策 8）。"""
+        with test_db.session() as session:
+            user = _user()
+            session.add(user)
+            session.flush()
+            session.add(_code("PLATFORM", owner_id=None))
+            session.add(_code("PERSONAL", owner_id=user.id))
+        with test_db.session() as session:
+            by_token = {
+                c.token: c.owner_id for c in session.scalars(select(InvitationCode))
+            }
+        assert by_token == {"PLATFORM": None, "PERSONAL": 1}
+
+    def test_a_code_can_be_used_more_than_once(self, test_db: Database) -> None:
+        """`max_uses > 1` 时"被谁用过"是一对多 —— 这正是记录独立成表的理由。"""
+        with test_db.session() as session:
+            code = _code("MULTI", max_uses=5)
+            alice = _user("alice")
+            bob = _user("bob")
+            session.add_all([code, alice, bob])
+            session.flush()
+            session.add_all(
+                [
+                    InvitationRedemption(code_id=code.id, user_id=alice.id),
+                    InvitationRedemption(code_id=code.id, user_id=bob.id),
+                ]
+            )
+        with test_db.session() as session:
+            records = session.scalars(select(InvitationRedemption)).all()
+        assert len(records) == 2
+
+    def test_deleting_the_code_takes_the_records_with_it(
+        self, test_db: Database
+    ) -> None:
+        """级联删除是刻意的：**所以管理员只失效、不删除**（决策 9）。
+
+        用户能删的只有"尚未使用"的码，那时本来就没有记录；一旦有过记录，走的是
+        `revoked_at`，物理删除不该发生。
+        """
+        with test_db.session() as session:
+            code = _code()
+            user = _user()
+            session.add_all([code, user])
+            session.flush()
+            session.add(InvitationRedemption(code_id=code.id, user_id=user.id))
+        with test_db.session() as session:
+            session.delete(session.scalars(select(InvitationCode)).one())
+        with test_db.session() as session:
+            assert session.scalars(select(InvitationRedemption)).all() == []
+
+    def test_deleting_the_user_keeps_the_record(self, test_db: Database) -> None:
+        """发码人注销后，"这张码被谁用了"必须还在 —— 记录里只少了他的名字。
+
+        与 `submissions.user_id` 同一个取向：账号删除不该抹掉社团收集到的事实。
+        """
+        with test_db.session() as session:
+            code = _code()
+            owner = _user("owner")
+            guest = _user("guest")
+            session.add_all([code, owner, guest])
+            session.flush()
+            session.add(InvitationRedemption(code_id=code.id, user_id=guest.id))
+            code.owner_id = owner.id
+        with test_db.session() as session:
+            session.delete(
+                session.scalars(select(User).where(User.username == "owner")).one()
+            )
+        with test_db.session() as session:
+            record = session.scalars(select(InvitationRedemption)).one()
+            remaining = session.scalars(select(InvitationCode)).one()
+        assert record.user_id is not None, "使用记录被牵连删掉了"
+        assert remaining.owner_id is None, "归属应变为不可考，而不是连带删除"

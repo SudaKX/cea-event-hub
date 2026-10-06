@@ -76,8 +76,23 @@
 | 批量改角色 / 状态 | `POST /admin/users:bulk` | x | x | o |
 | 签发重置令牌 | `POST /admin/users/{id}/reset-token` | x | x | o |
 | **删除账号** | `DELETE /admin/users/{id}` | x | x | o |
+| 申请自己的邀请码 | `POST /invitations` | x | o | o |
+| 查看自己发出的邀请码 | `GET /invitations` | x | o | o |
+| 删除自己未使用的邀请码 | `DELETE /invitations/{id}` | x | o | o |
+| 查看全部邀请码 | `GET /admin/invitations` | x | x | o |
+| 创建邀请码 | `POST /admin/invitations` | x | x | o |
+| 使邀请码失效 | `POST /admin/invitations/{id}/revoke` | x | x | o |
+| 读写平台开关 | `GET｜PUT /admin/switches` | x | x | o |
 
 注意"注册 / 登录 / 找回 / 重置"对匿名开放是**刻意的**——它们正是获得身份的入口。
+
+**邀请码的权限分两层。** 普通用户只能碰**自己名下**的码（申请、删除未使用的、查看使用
+情况），这是"个人分享"；管理员能看全部、能创建、能让任意一张失效，这是"运营动作"。
+两者的字段相同，区别只在范围 —— 所以用户端与管理端共用同一份响应形状。
+
+两个**平台开关**只对管理员开放，因为它们影响所有人：`invitations_paused` 拒绝一切
+邀请码校验（含此前发出的），`invitation_issuance_paused` 只挡新申请。它们存在库里，
+因此改完**立即生效**，不需要重启进程 —— 这是应急手段，等一次重启就失去意义。
 
 **删除与停用回答的是不同的问题**，因此是并列的两个动作，不设"必须先停用"的门槛：
 

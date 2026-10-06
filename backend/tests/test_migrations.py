@@ -31,7 +31,18 @@ BACKEND = REPO_ROOT / "backend"
 #: 三处是 `SET NULL`（events.created_by、submissions.reviewed_by、
 #: submission_files.uploaded_by）。只数行数抓不到后者的损坏，所以 `_seed` 会把那
 #: 三列都填上，`_audit_columns` 专门盯着它们不被置空。
-BATCH_STEPS = ["8d54ac924e60", "9f1c2a4b7e03", "afbd98e64a5e", "4d594b75179e"]
+#:
+#: `cb1a959c4b48`（邀请码）会被写进这份名单，是**实现时才发现**的：它给
+#: `pending_registrations` 加一个外键，而 SQLite 不能给既有表加外键，只能重建表 ——
+#: 于是它确实是一条批处理 ALTER，会把**正在等待验证的注册**搬一次。所以 `_seed`
+#: 必须造一条占位，否则这一步无数据可丢，测试会平凡通过。
+BATCH_STEPS = [
+    "8d54ac924e60",
+    "9f1c2a4b7e03",
+    "afbd98e64a5e",
+    "4d594b75179e",
+    "cb1a959c4b48",
+]
 
 
 def _config(database: Path) -> Config:
@@ -52,10 +63,26 @@ def migrated_db(tmp_path) -> Path:
 
 
 def _counts(database: Path) -> dict[str, int]:
+    """逐表数行。
+
+    **表还不存在时算 0。** 链上有的表是中途才建出来的（`pending_registrations` 就是），
+    而种子跑在它们出现之前 —— 对这份测试的语义（行不能凭空消失）来说，"表还没有"
+    与"表里没有行"是同一件事。
+    """
     connection = sqlite3.connect(database)
     try:
+        present = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
         return {
-            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            table: (
+                connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                if table in present
+                else 0
+            )
             for table in (
                 "events",
                 "submissions",
@@ -64,8 +91,48 @@ def _counts(database: Path) -> dict[str, int]:
                 # 它们会被连带删掉
                 "sessions",
                 "user_tokens",
+                # 重建 pending_registrations 时（加外键只能重建表）正等着验证的注册
+                "pending_registrations",
             )
         }
+    finally:
+        connection.close()
+
+
+def _seed_pending(database: Path) -> bool:
+    """占位表一出现就补种一条，返回是否真的插了。
+
+    **为什么不能放在 `_seed` 里。** 种子跑在 `7d1b16f0e498`，而 `pending_registrations`
+    是 `afbd98e64a5e` 才建出来的 —— 那时插会直接报"没有这张表"。
+
+    **为什么必须有这一条。** 邀请码那次迁移给这张表加外键，而 SQLite 只能靠**重建表**
+    做到；名单里那一步若没有数据，测试就只是走过场。这条占位代表一个已经填完表单、
+    正在等邮件的人：升级把他弄丢，他就既没建成账号、链接也失效了。
+
+    不写 `invitation_code_id`：那一列要等邀请码那次迁移才加上。
+    """
+    connection = sqlite3.connect(database)
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "pending_registrations" not in tables:
+            return False
+        if connection.execute(
+            "SELECT COUNT(*) FROM pending_registrations"
+        ).fetchone()[0]:
+            return False
+        connection.execute(
+            "INSERT INTO pending_registrations (username, email, password_hash, "
+            "display_name, token_hash, expires_at, created_at) "
+            "VALUES ('bob','bob@example.com','x','Bob','pendinghash',"
+            "'2027-01-01','2026-01-01')"
+        )
+        connection.commit()
+        return True
     finally:
         connection.close()
 
@@ -147,12 +214,24 @@ def test_batch_migrations_do_not_delete_dependent_rows(migrated_db: Path) -> Non
         "submission_files": 1,
         "sessions": 1,
         "user_tokens": 1,
+        "pending_registrations": 0,
     }
     assert _counts(migrated_db) == expected
     assert _audit_columns(migrated_db) == (1, 1, 1)
 
+    seeded_pending = False
     for revision in BATCH_STEPS:
         command.upgrade(config, revision)
+        # 占位那张表是 `afbd98e64a5e` 建出来的，比种子的位置晚。它一出现就补种一条，
+        # 否则邀请码那一步（重建该表）无数据可丢，测试会平凡通过 —— 而它代表的正是
+        # "已经填完表单、正在等邮件的人"。
+        #
+        # **只种一次。** 早先这里写成"表存在且为空就补种"，于是迁移把那行弄丢之后，
+        # 下一轮又把它补了回去，计数仍然是 1、断言照样通过 —— 一个让守卫失效的
+        # 帮手（变异测试抓到过）。种一次，之后丢了就是丢了。
+        if not seeded_pending and _seed_pending(migrated_db):
+            seeded_pending = True
+            expected["pending_registrations"] = 1
         counts = _counts(migrated_db)
         assert counts == expected, f"升到 {revision} 之后数据丢了：{counts}"
         # 行数不变也可能是被"置空"而不是被删 —— 那三个 SET NULL 的列单独比

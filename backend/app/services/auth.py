@@ -21,6 +21,7 @@ from app.core.exceptions import (
     EmailTaken,
     Forbidden,
     InvalidCredentials,
+    InvitationInvalid,
     NotFound,
     RegistrationConflict,
     RegistrationPending,
@@ -54,6 +55,7 @@ from app.repositories.users import (
     UserRepository,
 )
 from app.services import email_templates
+from app.services.invitations import InvitationService
 from app.services.tokens import UserTokenService
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,9 @@ class AuthService:
         # 删账号时要清掉该用户名下的配额计数行。那几行没有外键承托、不会随账号消失，
         # 而它们与用户生命周期是同一件事的两半 —— 放在这里，接口层就不必去凑。
         self.submitter_quotas = SubmitterQuotaRepository()
+        # 注册准入与邀请码的消耗（两阶段分别落在 request_registration 与
+        # verify_registration 里）
+        self.invitations = InvitationService()
 
     # ------------------------------------------------------------------
     # 注册（两阶段：占位 -> 核销建号）
@@ -93,6 +98,7 @@ class AuthService:
         email: str,
         password: str,
         display_name: str | None = None,
+        invitation_code: str | None = None,
         email_sender: EmailSender,
     ) -> bool:
         """建立待验证占位并发信。返回是否为**重入**（同一对已存在）。
@@ -100,6 +106,10 @@ class AuthService:
         重入时不新建、不重发：用户可能是刷新了页面或重按了提交，再发一封只会让
         他收到两封一模一样的邮件，而其中的旧链接仍然有效 —— 那才是真正让人困惑
         的地方。
+
+        **邀请码在建立占位之前校验。** 不合格的人不该进到"等邮件"那一步，也不该
+        因此产生一条占位（design.md 决策 1）。校验放在重入短路**之前**：规格要求
+        "无邀请码或邀请码无效一律不能注册"，重入也不例外。
         """
         normalized = normalize_username(username)
         normalized_email = normalize_email(email)
@@ -118,6 +128,11 @@ class AuthService:
             # 保留名清单挡住两件事：抢占 admin 使平台失去管理入口，
             # 以及出现同名普通账号造成"谁是管理员"的混淆
             raise ValidationFailed(fields={"username": "该用户名为系统保留，请换一个"})
+
+        # 准入。任何不合格都抛同一个错误 —— 区分原因等于给匿名接口一个枚举器
+        invitation = self.invitations.ensure_registration_allowed(
+            session, token=invitation_code
+        )
 
         if (
             self.pending.find_pair(
@@ -151,6 +166,9 @@ class AuthService:
             token_hash=hash_token(token),
             expires_at=now
             + timedelta(seconds=self.settings.PENDING_REGISTRATION_TTL_SECONDS),
+            # 记下这次用的是哪张码：到第二步时用户手里只有邮件里的令牌，
+            # 没有那串码，所以必须在这里存下来（design.md 决策 1）
+            invitation_code_id=invitation.id,
         )
         try:
             self.pending.add(session, pending)
@@ -198,6 +216,7 @@ class AuthService:
             pending.email,
             pending.password_hash,
             pending.display_name,
+            pending.invitation_code_id,
         )
 
         if not self.pending.claim(
@@ -206,7 +225,7 @@ class AuthService:
             # 并发的另一个请求先核销了
             raise TokenInvalid()
 
-        _, username, email, password_hash, display_name = snapshot
+        _, username, email, password_hash, display_name, invitation_code_id = snapshot
         user = User(
             username=username,
             display_name=display_name,
@@ -219,11 +238,21 @@ class AuthService:
         )
         try:
             self.users.add(session, user)
+            # 消耗邀请码，**与建号同一事务**：扣次数失败（那张码在这两步之间被用尽）
+            # 或建号失败时整体回滚 —— 次数不扣、占位仍在、链接仍可重试
+            self.invitations.consume(
+                session, code_id=invitation_code_id, user_id=user.id
+            )
         except IntegrityError as exc:
             # 占位存续期间有人注册了同名账号。整体回滚 → **占位仍在**，
             # 用户不至于既没建成账号又丢了凭据
             session.rollback()
             raise RegistrationConflict() from exc
+        except InvitationInvalid:
+            # 同上：回滚之后占位与链接都还在，用户可以换一张码重试吗？不能 —— 链接
+            # 是一次性的核销凭据，但**占位本身**还在，重新提交注册即可。
+            session.rollback()
+            raise
         return user
 
     def _send_registration_email(

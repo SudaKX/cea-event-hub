@@ -38,6 +38,13 @@ _PASSWORD_ALPHABET = (
 )
 _DEFAULT_PASSWORD_LENGTH = 20
 
+#: 邀请码的字符集：只留大写与数字，并去掉 `O/0` 与 `I/1`。
+#:
+#: 这些码是**线下转交**的（当面、群里、念给对方听），所以要短、要能一次读对；
+#: 大小写混排会在口头转述时出错，易混淆字符同理。
+_INVITATION_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_INVITATION_LENGTH = 10
+
 # 用于让"账号不存在"与"口令错误"耗时相当（防账号枚举）。
 # 延迟构建：模块导入时不必付这次哈希的代价。
 _dummy_hash: str | None = None
@@ -91,6 +98,28 @@ def hash_token(token: str) -> str:
 def generate_password(length: int = _DEFAULT_PASSWORD_LENGTH) -> str:
     """生成高强度随机口令，用于首次启动引导。"""
     return "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+
+
+def generate_invitation_token() -> str:
+    """生成一张邀请码的 token。
+
+    **比邮件里那些凭据短得多，这是刻意的、也是权衡过的。** 32 个字符的 URL-safe
+    令牌没法让人在注册页手输，而这些码的使用方式就是线下转交（当面、群里、念给
+    对方听）。32 个字符的字母表取 10 位 ≈ 1.1×10¹⁵ 种可能。
+
+    **为什么这里可以短，而邮件验证码不能。** 本项目明确拒绝过"邮件里放 6 位数字
+    验证码"，理由是短码必须配 HMAC 摘要、尝试次数上限，以及一个匿名可爆破的端点。
+    邀请码面对的是同一类威胁，但两道防线换了位置：
+
+    1. 校验失败**不区分原因**（见 `services/invitations.py`），所以拿不到"这个码
+       存在但过期了"这类反馈，只能靠盲猜；
+    2. 注册端点本来就有限流（IP 维度），而每猜一次都要走一次完整的注册请求。
+
+    在这个组合下，把 10 位码猜中的速率压到了实际不可行的量级。**这两条缺一不可**：
+    若哪天失败提示开始区分原因，或注册端点的限流被放宽，这个长度就不再安全 ——
+    届时必须加长它，而不是只改注释。
+    """
+    return "".join(secrets.choice(_INVITATION_ALPHABET) for _ in range(_INVITATION_LENGTH))
 
 
 def canonical_json(payload: Any) -> str:

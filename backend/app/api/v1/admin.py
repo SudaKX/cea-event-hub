@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -30,7 +31,8 @@ from app.core.deps import (
     RuntimeSettings,
     require_admin,
 )
-from app.core.exceptions import NotFound
+from app.core.enums import PlatformSwitchKey
+from app.core.exceptions import BadRequest, NotFound
 from app.repositories import paginate
 from app.repositories.users import UserRepository
 from app.schemas.auth import (
@@ -53,6 +55,15 @@ from app.schemas.events import (
     EventUpdateRequest,
     to_admin,
 )
+from app.schemas.invitations import (
+    CreateInvitationRequest,
+    InvitationEnvelope,
+    InvitationListResponse,
+    InvitationUsagePublic,
+    PlatformSwitchRequest,
+    PlatformSwitchesPublic,
+    invitation_to_public,
+)
 from app.schemas.submissions import (
     BatchDeleteRequest,
     BatchReviewRequest,
@@ -65,7 +76,10 @@ from app.schemas.submissions import (
 from app.services.auth import AuthService
 from app.services.content import ContentService
 from app.services.events import EventService
+from app.services.invitations import CodeView, InvitationService
 from app.services.submissions import SubmissionService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/admin",
@@ -619,6 +633,129 @@ def issue_reset_token(
         token=token,
         expires_at=expires_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# 邀请码与平台开关
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/invitations",
+    response_model=InvitationListResponse,
+    summary="全部邀请码",
+)
+def list_invitations(
+    session: DbSession,
+    admin: AdminUser,
+    settings: RuntimeSettings,
+) -> InvitationListResponse:
+    """全部邀请码，含每张的使用情况。
+
+    与用户端看到的字段相同 —— 两张界面要显示的东西本来就一样（token、名称、有效期、
+    次数、被谁用过）。区别只在**范围**：这里是全部，那里只有自己名下的。
+    """
+    views = InvitationService().list_all(session)
+    return InvitationListResponse(
+        invitations=[invitation_to_public(view.code, usages=[InvitationUsagePublic(username=u.username, used_at=u.used_at) for u in view.usages]) for view in views]
+    )
+
+
+@router.post(
+    "/invitations",
+    response_model=InvitationEnvelope,
+    status_code=status.HTTP_201_CREATED,
+    summary="创建邀请码",
+)
+def create_invitation(
+    payload: CreateInvitationRequest,
+    session: DbSession,
+    admin: AdminUser,
+    settings: RuntimeSettings,
+) -> InvitationEnvelope:
+    """管理员建码，四项都可指定。
+
+    **不受普通用户那两条额度限制**（同时一张未使用、每 24 小时一张）：那是为个人
+    分享设计的，而这是运营动作。码的 `owner_id` 为空 —— 平台码，不归任何个人
+    （design.md 决策 8）。
+    """
+    code = InvitationService().create(
+        session,
+        actor=admin,
+        token=payload.token,
+        name=payload.name,
+        days=payload.days,
+        max_uses=payload.max_uses,
+    )
+    logger.info(
+        "管理员 %r 创建了邀请码 %r（%s 天、%s 次）",
+        admin.username,
+        code.token,
+        payload.days,
+        payload.max_uses,
+    )
+    return InvitationEnvelope(invitation=invitation_to_public(code))
+
+
+@router.post(
+    "/invitations/{code_id}/revoke",
+    response_model=InvitationEnvelope,
+    summary="使邀请码失效",
+)
+def revoke_invitation(
+    code_id: int,
+    session: DbSession,
+    admin: AdminUser,
+    settings: RuntimeSettings,
+) -> InvitationEnvelope:
+    """让一张码失效。
+
+    **失效而不是删除**：已经产生使用记录的码必须留住那些记录 —— 删了它，"谁邀请了他"
+    就无从回答（design.md 决策 9）。
+    """
+    code = InvitationService().revoke(session, actor=admin, code_id=code_id)
+    logger.info("管理员 %r 使邀请码 %r 失效", admin.username, code.token)
+    return InvitationEnvelope(invitation=invitation_to_public(code))
+
+
+@router.get(
+    "/switches",
+    response_model=PlatformSwitchesPublic,
+    summary="平台开关的当前状态",
+)
+def read_switches(session: DbSession, admin: AdminUser) -> PlatformSwitchesPublic:
+    """两个应急开关。它们存在库里，因此改完**立即生效**，不需要重启进程。"""
+    return PlatformSwitchesPublic(**InvitationService().switch_states(session))
+
+
+@router.put(
+    "/switches",
+    response_model=PlatformSwitchesPublic,
+    summary="改变平台开关",
+)
+def write_switch(
+    payload: PlatformSwitchRequest,
+    session: DbSession,
+    admin: AdminUser,
+    settings: RuntimeSettings,
+) -> PlatformSwitchesPublic:
+    """改一个开关。
+
+    **暂停邀请**拒绝一切邀请码校验，含此前发出、仍在有效期内的码 —— 它是应急刹车，
+    只挡新码等于没刹车。**暂停申请**只挡新申请，已发出的码照常可用。两者对应两类
+    事故（码被泄露 / 某个账号在刷码），合成一个就总有一种场景要迁就另一种。
+    """
+    try:
+        key = PlatformSwitchKey(payload.key)
+    except ValueError:
+        raise BadRequest("未知的开关") from None
+
+    service = InvitationService()
+    service.set_switch(session, actor=admin, key=key, enabled=payload.enabled)
+    logger.info(
+        "管理员 %r 把开关 %s 设为 %s", admin.username, key.value, payload.enabled
+    )
+    return PlatformSwitchesPublic(**service.switch_states(session))
 
 
 __all__ = ["router"]

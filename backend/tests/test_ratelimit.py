@@ -9,6 +9,7 @@ from app.core.config import settings as global_settings
 from app.core.enums import EventStatus
 from app.db.models import Event
 from app.infra.ratelimit_memory import InMemoryRateLimiter
+from conftest import invitation_code_for
 
 API = "/api/v1"
 
@@ -210,14 +211,32 @@ class TestRateLimitEnforcement:
         monkeypatch.setattr(global_settings, "RATE_LIMIT_AUTH_IP_MAX", 2)
 
         assert client.post(
-            f"{API}/auth/register", json={"username": "alice", "password": "correct-horse", "email": "alice@example.com"}
+            f"{API}/auth/register",
+            json={
+                "username": "alice",
+                "password": "correct-horse",
+                "email": "alice@example.com",
+                "invitation_code": invitation_code_for(client),
+            },
         ).status_code == 202
         assert client.post(
-            f"{API}/auth/register", json={"username": "bob", "password": "correct-horse", "email": "bob@example.com"}
+            f"{API}/auth/register",
+            json={
+                "username": "bob",
+                "password": "correct-horse",
+                "email": "bob@example.com",
+                "invitation_code": invitation_code_for(client),
+            },
         ).status_code == 202
 
         response = client.post(
-            f"{API}/auth/register", json={"username": "carol", "password": "correct-horse", "email": "carol@example.com"}
+            f"{API}/auth/register",
+            json={
+                "username": "carol",
+                "password": "correct-horse",
+                "email": "carol@example.com",
+                "invitation_code": invitation_code_for(client),
+            },
         )
         assert response.status_code == 429
 

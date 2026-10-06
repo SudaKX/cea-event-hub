@@ -7,13 +7,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import admin, auth, events, health, submissions
+from app.api.v1 import admin, auth, events, health, invitations, submissions
 from app.core.config import settings
 
 api_router = APIRouter(prefix=settings.API_PREFIX)
 
 api_router.include_router(health.router)
 api_router.include_router(auth.router)
+api_router.include_router(invitations.router)
 api_router.include_router(events.router)
 api_router.include_router(submissions.router)
 api_router.include_router(submissions.me_router)
