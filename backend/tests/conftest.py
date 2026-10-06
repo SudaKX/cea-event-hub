@@ -69,15 +69,18 @@ def db_session(test_db: Database) -> Iterator:
 
 @pytest.fixture
 def content_root(tmp_path) -> "Path":
-    """每个测试独立的内容/数据根目录。
+    """每个测试独立的内容/数据/草稿根目录。
 
     不隔离的话，测试会把活动内容写进仓库里的 content/ 与 data/。
+    草稿目录同理 —— 它是**入库的源码目录**，测试往里写东西会污染工作区，
+    比污染那两个不入库的目录更糟。
     """
     from pathlib import Path
 
     root = Path(tmp_path)
     (root / "content").mkdir(parents=True, exist_ok=True)
     (root / "data").mkdir(parents=True, exist_ok=True)
+    (root / "events").mkdir(parents=True, exist_ok=True)
     return root
 
 
@@ -96,9 +99,15 @@ def app(test_db: Database, monkeypatch: pytest.MonkeyPatch, content_root):
     monkeypatch.setattr(settings, "ADMIN_BOOTSTRAP_ENABLED", False)
     # 测试走 http，Secure Cookie 不会被回传，因此按开发环境的配置来
     monkeypatch.setattr(settings, "SESSION_COOKIE_SECURE", False)
+    # 运行模式显式钉住。草稿内容挂载与开发活动补齐都以它为判据，而它默认来自
+    # 开发者本机的 .env —— 不钉住的话，本机若写着 APP_ENV=production，这一批用例
+    # 会因为"开发专用的东西没挂上"而失败，而失败信息指向的是别的东西。
+    # 需要观察非开发模式的用例自行覆盖它。
+    monkeypatch.setattr(settings, "APP_ENV", "development")
     # 内容与数据目录指向临时位置（StaticFiles 在 create_app 时绑定目录）
     monkeypatch.setattr(settings, "CONTENT_DIR", content_root / "content")
     monkeypatch.setattr(settings, "DATA_DIR", content_root / "data")
+    monkeypatch.setattr(settings, "DRAFT_DIR", content_root / "events")
 
     application = create_app()
     application.state.database = test_db

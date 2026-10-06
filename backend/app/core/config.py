@@ -41,6 +41,23 @@ class Settings(BaseSettings):
     DATABASE_URL: str = f"sqlite+pysqlite:///{(REPO_ROOT / 'var' / 'app.db').as_posix()}"
     CONTENT_DIR: Path = REPO_ROOT / "content"
     DATA_DIR: Path = REPO_ROOT / "data"
+    #: 草稿活动内容的**源码**目录，只在开发模式下挂到 `/draft`。
+    #:
+    #: 目录叫 `events`、URL 是 `/draft` —— 这个错位是刻意的：目录回答"放的是什么"
+    #: （活动内容），URL 回答"它处于什么状态"（草稿）。两者不是同一个问题，硬凑成
+    #: 同名反而会把"源码"和"线上产物"混成一个概念。写在这里是为了让下一个人不必
+    #: 怀疑自己漏配了什么。
+    #:
+    #: 与 `CONTENT_DIR` 的职责区别，是这两个目录能同时存在的全部理由：
+    #: `CONTENT_DIR` 是**投放产物**（管理台上传的 zip 解压而来、不入版本控制、
+    #: 下次投放整体替换），`DRAFT_DIR` 是**源码**（入库、由作者直接编辑）。
+    DRAFT_DIR: Path = REPO_ROOT / "events"
+    #: 开发调试台缺省使用的活动标识，只在开发模式下由启动任务补齐。
+    #:
+    #: 它必须是一个**已发布**的活动：未发布的活动在公开接口上不可见，草稿页连
+    #: 活动信息都取不到。可见性取"不可见"，因此它不会出现在首页的公开目录里，
+    #: 但按标识仍能直接打开 —— 这正是调试台需要的那一档。
+    DEV_EVENT_ID: str = "dev"
 
     # ---------- 会话 ----------
     SESSION_TTL_SECONDS: int = 7 * 24 * 3600
@@ -175,6 +192,17 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.APP_ENV == "production"
+
+    @property
+    def is_development(self) -> bool:
+        """是否为开发模式。
+
+        **只认 `development` 这一个取值**，而不是"非 production"。草稿内容挂载与
+        开发活动补齐都以它为判据，而它们各自都有一个不该被误开的后果：用"非生产"
+        来定义的话，任何未预期的 `APP_ENV`（staging、拼错的 production、空串）都会
+        意外获得一份**公开可读的草稿内容面**，以及一个凭空出现的已发布活动。
+        """
+        return self.APP_ENV == "development"
 
     def ensure_directories(self) -> None:
         """确保运行时目录存在。"""

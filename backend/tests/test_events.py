@@ -34,6 +34,24 @@ def _seed_event(test_db, event_id="spring-2026", **overrides) -> None:
         session.add(Event(**defaults))  # type: ignore[arg-type]
 
 
+def _admin_event_ids(admin_client) -> list[str]:
+    """管理端可见的活动标识，**剔除开发模式的调试活动**。
+
+    开发模式下启动任务会补一个不可见、免登录的调试活动（见 services/dev_seed.py），
+    于是每个测试库里都多出这一行。它与本文件要断言的东西无关，却会让"整张列表恰好
+    等于某某"这类断言平白多出一项 —— 那是夹具噪声，不是行为差异。剔掉它，断言才能
+    继续对**顺序与集合本身**保持精确。
+
+    注意这里不是"改成包含即可"：本文件有好几条断言的价值就在"恰好等于"上
+    （比如不可见的活动对管理端可见、且没有多出别的），放宽成超集就把它们废掉了。
+    """
+    return [
+        event["id"]
+        for event in admin_client.get(ADMIN).json()["events"]
+        if event["id"] != global_settings.DEV_EVENT_ID
+    ]
+
+
 class TestCreate:
     """任务 6.1 / 6.3"""
 
@@ -298,8 +316,7 @@ class TestEventVisibility:
             status=EventStatus.LIVE.value,
             visibility=EventVisibility.INVISIBLE.value,
         )
-        body = admin_client.get(ADMIN).json()
-        assert [e["id"] for e in body["events"]] == ["unlisted"]
+        assert _admin_event_ids(admin_client) == ["unlisted"]
 
     def test_invalid_visibility_is_rejected(self, admin_client, test_db) -> None:
         _seed_event(test_db, "live-one")
@@ -345,8 +362,7 @@ class TestAdminAuthorization:
         _seed_event(test_db, "draft-one", status=EventStatus.DRAFT.value)
         _seed_event(test_db, "live-one", status=EventStatus.LIVE.value)
 
-        ids = {e["id"] for e in admin_client.get(ADMIN).json()["events"]}
-        assert ids == {"draft-one", "live-one"}
+        assert set(_admin_event_ids(admin_client)) == {"draft-one", "live-one"}
 
     def test_admin_list_can_filter_by_status(self, admin_client, test_db) -> None:
         _seed_event(test_db, "draft-one", status=EventStatus.DRAFT.value)

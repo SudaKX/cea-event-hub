@@ -30,6 +30,7 @@ from app.infra import (
     build_rate_limiter,
 )
 from app.services.bootstrap import ensure_bootstrap_admin
+from app.services.dev_seed import ensure_dev_event
 from app.services import email_templates
 from app.services.janitor import Janitor
 
@@ -51,6 +52,9 @@ def run_startup_tasks(app: FastAPI) -> None:
     """
     try:
         ensure_bootstrap_admin(app.state.database, app.state.settings)
+        # 开发模式下补齐调试活动。与上面的引导同形：以库的状态为触发条件、幂等、
+        # 非开发模式下完全惰性（见 services/dev_seed.py 关于"守卫写漏会怎样"的说明）。
+        ensure_dev_event(app.state.database, app.state.settings)
     except OperationalError as exc:
         # 表不存在时的报错很晦涩（"no such table: users"），这里补一句该怎么做
         logger.error(
@@ -153,6 +157,31 @@ def create_app() -> FastAPI:
         ),
         name="content",
     )
+
+    # 草稿活动内容：**只在开发模式下挂载**。
+    #
+    # 与 /content 走同一条管线是刻意的，不是图省事：草稿页必须与线上页面对宿主
+    # 呈现出同一组能力，否则本地验证证明不了线上的行为。差别只有两处 —— 根目录，
+    # 以及"是否挂载"。少了这条管线里的任何一件事都会让排查跑偏：
+    #   - 少了通配 ACAO：草稿页读不到自己目录下的数据文件，而那正是文档鼓励的用法
+    #   - 少了桥接脚本注入：作者不写那一行就握不上手，症状是"活动页连不上宿主"，
+    #     而根因在服务端配置
+    #
+    # 目录先确保存在：StaticFiles 在构造时就要求目录存在，缺了会让整个后端起不来，
+    # 而"起不来"与"草稿页 404"相比是重得多的失败模式。
+    if settings.is_development:
+        settings.DRAFT_DIR.mkdir(parents=True, exist_ok=True)
+        app.mount(
+            "/draft",
+            ContentStaticFiles(
+                directory=settings.DRAFT_DIR,
+                html=True,
+                cors_origin=settings.CONTENT_CORS_ALLOW_ORIGIN,
+                sdk_path=settings.CONTENT_SDK_PATH,
+                inject_sdk=settings.CONTENT_SDK_INJECT,
+            ),
+            name="draft",
+        )
     return app
 
 
