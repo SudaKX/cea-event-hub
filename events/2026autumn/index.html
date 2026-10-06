@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2026 秋季招新</title>
+<!--
+  2026 秋季招新 · 报名页（活动 2026autumn）
+
+  接入方式见 docs/event-page-guide.md，通讯契约见 docs/bridge-protocol.md。
+  这份文件连同同目录的资源一起打成 zip 投放即可（条目直接是 index.html、assets/…）。
+
+  它是**源码**，放在 events/ 下（入库）。开发时这样打开：
+
+      http://localhost:5173/develop?src=/draft/2026autumn/index.html
+
+  不要把它复制回 content/ —— 那是投放产物目录，不入库，而且下一次 zip 投放会把它
+  整体替换掉。两个目录的分工见 docs/dev-harness.md。
+
+  写这一页时踩到的三条硬约束，改动前请先读：
+    1. **不要 fetch('/api/…')** —— /api/** 不返回任何 CORS 头，沙箱下被浏览器拦死。
+       一切数据经 CEA.* 由宿主代取。
+    2. **不要在这里放秘密** —— /content/** 是公开只读的，注释与内联脚本都算内容。
+    3. **localStorage / sessionStorage / history.pushState 都会抛异常** —— 活动页处在
+       不透明源。草稿改走 CEA.storage.*（宿主按活动代存），多步流程改用 hash。
+
+  版面：活动页占满整个视口，宿主不在上面叠任何自己的界面，所以这一页自己滚动。
+-->
+<style>
+  /*
+    宿主下发的设计令牌在这里写成兜底值。
+
+    写死一份是为了让**首屏在握手完成前就是最终观感** —— 否则会看到一次底色闪变。
+    真正的取值由页面末尾的「令牌同步」脚本从 hub:init / hub:theme 里覆盖掉，
+    所以这里即使与宿主漂移，也只是首屏那一瞬间的事。
+
+    令牌表见 docs/event-page-guide.md 的「设计令牌」；取值来源是宿主自己的
+    frontend/src/styles/tokens.css。想不跟随宿主也可以，把那段同步脚本删掉即可。
+  */
+  :root{
+    --bg:#0b0b0d; --panel:#101014; --bone:#cfcac4; --edge:#b0aba5;
+    --mute:#8b8e97; --dim:#5f626b; --red:#d0202f; --red-hi:#ff4a55;
+    --line:rgba(255,255,255,.09); --shadow-ink:#26262e;
+    /* 宿主这一版走直角路线，令牌里给的就是 0。引用令牌而不是写死 0，
+       是为了将来宿主改回圆角时这一页能跟着变。 */
+    --radius-control:0; --radius-surface:0;
+    --mono:ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,"Courier New",monospace;
+    --sans:"Inter","Segoe UI",system-ui,-apple-system,"Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  /*
+    `hidden` 必须真的隐藏。
+
+    浏览器默认的 `[hidden]{display:none}` 在 **UA 来源**，而下面 `form{display:flex}`
+    在作者来源 —— 层叠里作者来源优先于 UA 来源，**与选择器具体度无关**。所以少了这一条，
+    `form.hidden = true` 完全不起作用：终态提示（名额已满、已截止）会和表单同时出现，
+    而首屏在握手完成之前也会先把表单露出来。
+  */
+  [hidden]{display:none !important}
+  html,body{min-height:100%}
+  body{
+    margin:0;
+    padding:clamp(24px,4vw,56px) clamp(18px,4vw,40px) 72px;
+    background:var(--bg);color:var(--bone);
+    font:15px/1.7 var(--sans);
+    -webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:680px;margin:0 auto}
+
+  /* ---- 页头 ---- */
+  h1{
+    margin:0 0 8px;
+    font:700 clamp(24px,4.2vw,32px)/1.15 var(--mono);
+    letter-spacing:.04em;
+  }
+  h1 em{font-style:normal;color:var(--red-hi)}
+  .lead{margin:0 0 18px;color:var(--mute);font-size:14px}
+  .lead b{color:var(--red-hi);font-weight:700}
+  /* 群信息：报名的出口。放在页头是因为"报完名去哪"是填表前就该知道的事 */
+  .group{
+    margin:0 0 18px;padding:10px 12px;
+    background:var(--panel);border:1px solid var(--line);border-left:2px solid var(--red);
+    border-radius:var(--radius-surface);
+    font-size:13px;line-height:1.75;overflow-wrap:anywhere;
+  }
+  .group a{color:var(--red-hi)}
+
+  /* 连接状态与活动信息。等宽小字，是"平台侧"的信息而不是活动文案。 */
+  .meta{
+    margin:0 0 26px;padding:10px 12px;
+    border:1px solid var(--line);border-left:2px solid var(--dim);
+    font:500 12px/1.7 var(--mono);color:var(--mute);
+  }
+  .meta[data-tone="ok"]{border-left-color:var(--bone)}
+  .meta[data-tone="error"]{border-left-color:var(--red);color:var(--red-hi)}
+
+  /* ---- 卡片 ---- */
+  .card{
+    padding:22px 20px;background:var(--panel);
+    border:1px solid var(--line);border-radius:var(--radius-surface);
+  }
+  .card h2{margin:0 0 8px;font:700 17px/1.3 var(--mono);letter-spacing:.03em}
+  .card p{margin:0 0 6px;color:var(--mute);font-size:13px}
+  .card p:last-child{margin-bottom:0}
+
+  /* ---- 表单 ---- */
+  form{display:flex;flex-direction:column;gap:18px}
+  .row{display:grid;gap:18px}
+  @media (min-width:560px){.row--2{grid-template-columns:1fr 1fr}}
+  .field{display:flex;flex-direction:column;gap:7px;margin:0;padding:0;border:0}
+  .label{
+    font:600 12px/1 var(--mono);letter-spacing:.08em;color:var(--mute);
+    display:flex;align-items:baseline;gap:6px;
+  }
+  .label .req{color:var(--red-hi)}
+  .label .hint{color:var(--dim);font-weight:500;letter-spacing:0}
+  input[type=text],input[type=tel],select,textarea{
+    width:100%;padding:10px 12px;
+    background:var(--bg);border:1px solid var(--line);
+    border-radius:var(--radius-control);
+    color:var(--bone);font:500 14px/1.5 var(--mono);
+    transition:border-color 160ms ease;
+  }
+  textarea{min-height:96px;font-family:var(--sans);resize:vertical}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red-hi)}
+  /* 字段级错误：既改边框也留文字，不靠颜色单独表意 */
+  [aria-invalid="true"]{border-color:var(--red)}
+
+  /* ---- 意向方向：带说明的多选卡片 ---- */
+  .dirs{display:grid;gap:8px}
+  @media (min-width:560px){.dirs{grid-template-columns:1fr 1fr}}
+  .dir{
+    display:grid;grid-template-columns:auto 1fr;gap:2px 10px;align-items:baseline;
+    padding:11px 12px;cursor:pointer;
+    background:var(--bg);border:1px solid var(--line);
+    border-radius:var(--radius-surface);
+    transition:border-color 160ms ease,background 160ms ease;
+  }
+  .dir:hover{border-color:var(--edge)}
+  .dir input{grid-row:1/3;align-self:center;width:15px;height:15px;margin:0;accent-color:var(--red)}
+  .dir-name{font:600 13px/1.4 var(--mono);letter-spacing:.04em}
+  .dir-desc{font-size:12px;line-height:1.5;color:var(--mute)}
+  .dir:has(input:checked){border-color:var(--red);background:rgba(255,74,85,.07)}
+  .dir:has(input:focus-visible){outline:2px solid var(--red-hi);outline-offset:1px}
+
+  .err{margin:0;font:500 12px/1.5 var(--sans);color:var(--red-hi)}
+
+  /* ---- 消息与提交 ---- */
+  .msg{
+    margin:0;padding:10px 12px;font-size:13px;
+    border:1px solid var(--line);border-left:2px solid var(--dim);
+    border-radius:var(--radius-control);color:var(--bone);
+  }
+  .msg[data-tone="error"]{border-left-color:var(--red);background:rgba(255,74,85,.1);color:var(--red-hi)}
+  .msg[data-tone="ok"]{border-left-color:var(--bone)}
+
+  .actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  button{
+    padding:12px 20px;border:1px solid transparent;cursor:pointer;
+    background:var(--red);color:#fff;
+    font:600 14px/1 var(--sans);letter-spacing:.02em;
+    border-radius:var(--radius-control);
+    transition:background 160ms ease,opacity 160ms ease;
+  }
+  button:hover:not(:disabled){background:var(--red-hi)}
+  button:focus-visible{outline:2px solid var(--red-hi);outline-offset:2px}
+  button:disabled{opacity:.5;cursor:progress}
+  button.ghost{background:transparent;color:var(--bone);border-color:var(--line)}
+  button.ghost:hover:not(:disabled){background:transparent;border-color:var(--edge)}
+  .foot{font:500 12px/1.6 var(--mono);color:var(--dim)}
+
+  /* ---- 成功态 ---- */
+  .done .id{font:700 15px/1.5 var(--mono);color:var(--bone)}
+  .done .id span{color:var(--dim);font-weight:500}
+  .done a{color:var(--red-hi)}
+  /*
+    群二维码。给一个上限而不是铺满：它是拿来扫的，宽度合适即可，铺满会把整张卡片拉得很长。
+
+    **不加白色内边距。** 图片本身已是"深色卡片 + 内部白色二维码面板"，静默区（quiet zone）
+    在图片里已经有了；外面再套一圈白边只会在深色界面上显出一个突兀的白框。这里只留一道
+    与页面同语言的发丝描边，用来把图片的深色底与卡片底分开。
+  */
+  .done .qr{
+    display:block;width:100%;max-width:300px;height:auto;
+    margin:14px auto 0;
+    border:1px solid var(--line);border-radius:var(--radius-surface);
+  }
+
+  /* 宿主界面之外没有别的东西，所以窄屏优先保证可点区域够大 */
+  @media (max-width:420px){
+    button{width:100%}
+    .actions{flex-direction:column;align-items:stretch}
+    .foot{text-align:center}
+  }
+</style>
+</head>
+<body>
+
+<main class="wrap">
+  <h1>秋季<em>招新</em></h1>
+  <p class="lead">
+    带 <b>*</b> 的为必填。
+  </p>
+
+  <!--
+    群链接既做成可点的，也把地址原样显示出来 —— 文案说的就是"复制链接"，所以
+    **地址本身必须可见可选中**；而沙箱允许 target="_blank" 外链，能点也顺手。
+    两者并存，哪条路都能走。
+  -->
+  <p class="group">
+    复制链接加入群聊【CEA 2026 招新群】（439543188）：
+    <a href="https://qm.qq.com/q/l5rSJnmsOk" target="_blank" rel="noopener noreferrer">https://qm.qq.com/q/l5rSJnmsOk</a>
+  </p>
+
+  <p class="meta" id="meta" data-tone="">正在与宿主建立连接…</p>
+
+  <!-- 终态与前置条件：名额满、已截止、未开放、需要登录。命中一个就不显示表单。 -->
+  <section class="card" id="gate" hidden></section>
+
+  <form id="form" novalidate hidden>
+    <div class="row row--2">
+      <div class="field">
+        <label class="label" for="name">姓名 <span class="req">*</span></label>
+        <input id="name" name="name" type="text" maxlength="32" autocomplete="name" placeholder="你的名字">
+        <p class="err" data-err="name" hidden></p>
+      </div>
+
+      <div class="field">
+        <label class="label" for="grade">年级 <span class="req">*</span></label>
+        <select id="grade" name="grade">
+          <option value="">请选择</option>
+          <option value="大一">大一</option>
+          <option value="大二">大二</option>
+          <option value="大三">大三</option>
+          <option value="大四">大四</option>
+          <option value="研究生">研究生</option>
+        </select>
+        <p class="err" data-err="grade" hidden></p>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="label" for="qq">QQ 号 <span class="req">*</span></label>
+      <input id="qq" name="qq" type="text" inputmode="numeric" maxlength="12"
+             placeholder="方便后续通知">
+      <p class="err" data-err="qq" hidden></p>
+    </div>
+
+    <fieldset class="field">
+      <legend class="label">
+        意向方向 <span class="req">*</span>
+        <span class="hint">（可多选，至少 1 项）</span>
+      </legend>
+      <div class="dirs">
+        <label class="dir">
+          <input type="checkbox" name="directions" value="技术">
+          <span class="dir-name">技术</span>
+          <span class="dir-desc">主体，负责各类开发和运维</span>
+        </label>
+        <label class="dir">
+          <input type="checkbox" name="directions" value="图文">
+          <span class="dir-name">图文</span>
+          <span class="dir-desc">海报文案设计</span>
+        </label>
+        <label class="dir">
+          <input type="checkbox" name="directions" value="管理">
+          <span class="dir-name">管理</span>
+          <span class="dir-desc">经费管理和文书工作</span>
+        </label>
+        <label class="dir">
+          <input type="checkbox" name="directions" value="活动">
+          <span class="dir-name">活动</span>
+          <span class="dir-desc">线下协助活动开展，物资准备</span>
+        </label>
+      </div>
+      <p class="err" data-err="directions" hidden></p>
+    </fieldset>
+
+    <div class="field">
+      <label class="label" for="intro">兴趣或擅长什么</label>
+      <textarea id="intro" name="intro" maxlength="500"
+                placeholder="随便写点：做过什么、想学什么、有没有作品或经历。没有也不影响报名。"></textarea>
+      <p class="err" data-err="intro" hidden></p>
+    </div>
+
+    <p class="msg" id="msg" data-tone="" hidden></p>
+
+    <div class="actions">
+      <button type="submit" id="submit">提交报名</button>
+      <span class="foot" id="foot">提交后无法自行修改，请核对后再交。</span>
+    </div>
+  </form>
+
+  <section class="card done" id="done" hidden>
+    <h2>报名已提交</h2>
+    <p class="id" id="done-id"></p>
+    <p>
+      请加入群聊方便后续通知。复制链接加入群聊【CEA 2026 招新群】（439543188）：
+      <a href="https://qm.qq.com/q/l5rSJnmsOk" target="_blank" rel="noopener noreferrer">https://qm.qq.com/q/l5rSJnmsOk</a>
+    </p>
+    <!--
+      群二维码。同目录的相对路径：无论这一页从 /draft 还是 /content 提供，都取得到。
+
+      `width`/`height` 两个属性给的是**原始比例**（1284×2280），用来在图片下载完成之前
+      就把位置占住，避免文案被顶下去（CLS）。实际尺寸交给 CSS 的 max-width。
+    -->
+    <img class="qr" src="qrcode.png" width="300" height="533"
+         alt="CEA 2026 招新群二维码，群号 439543188">
+  </section>
+</main>
+
+<script>
+/*
+  令牌同步 —— 让本页跟随宿主下发的设计令牌。
+
+  为什么需要这一段：宿主确实会把令牌放在 `hub:init` 的 `theme` 字段里发过来
+  （见 frontend/src/bridge/host.ts 的 sendInit），但**SDK 目前不把它暴露出来** ——
+  `frontend/src/bridge/sdk/index.ts` 处理 `hub:init` 时只取了 identity，
+  `hub:theme` 干脆没有分支，所以活动页拿不到任何一个令牌读取入口。
+
+  于是这里直接监听宿主已经发到本窗口的消息，只认令牌那一个字段。这不是绕过沙箱：
+  消息本来就是发给这个 iframe 的，读的也只是公开的颜色与字体，不含任何凭据。
+  校验用**窗口引用**而不是 origin —— 活动页处在不透明源，其 origin 恒为字符串
+  "null"，拿它判断没有意义。
+
+  宿主将来若补上 `CEA.theme()`，把这一段删掉换成它即可。
+*/
+(function () {
+  'use strict'
+
+  // 只接受宿主确实会下发的那些令牌名，避免把任意变量写进 :root
+  var ALLOWED = /^--(bg|panel|bone|edge|mute|dim|red|red-hi|line|shadow-ink|mono|sans|radius-control|radius-surface)$/
+
+  function applyTheme(theme) {
+    if (!theme || typeof theme !== 'object') return
+    var root = document.documentElement.style
+    for (var name in theme) {
+      if (!Object.prototype.hasOwnProperty.call(theme, name)) continue
+      if (!ALLOWED.test(name)) continue
+      var value = theme[name]
+      if (typeof value === 'string' && value !== '') root.setProperty(name, value)
+    }
+  }
+
+  window.addEventListener('message', function (event) {
+    // 宿主是唯一合法发送方；窗口引用不可伪造
+    if (event.source !== window.parent) return
+    var data = event.data
+    if (!data || typeof data !== 'object' || typeof data.v !== 'number') return
+    // hub:init 在握手时下发，hub:theme 是宿主主动更新；两者载荷形状一致
+    if (data.type !== 'hub:init' && data.type !== 'hub:theme') return
+    applyTheme((data.payload || {}).theme)
+  })
+})()
+</script>
+
+<!--
+  这一行其实可以不写 —— 托管层返回 HTML 前会自动注入它。
+  显式写出来是为了不依赖 CONTENT_SDK_INJECT 这个开关。
+
+  **id="cea-sdk" 不能省。** 注入与否只看这个 id，不看 src：路径会从 /sdk/v1/ 走到
+  /sdk/v2/，按 src 判断的话 SDK 一换路径所有老页面都会被判成"没有引用"，于是被插
+  一个新标签、SDK 加载两次。少了 id 的写法属于"没有引用"。
+-->
+<script src="/sdk/v1/cea.js" id="cea-sdk"></script>
+<script>
+(async () => {
+  'use strict'
+
+  // ------------------------------------------------------------------
+  // 常量
+  // ------------------------------------------------------------------
+
+  /*
+    提交分类标签。只影响管理端列表的分组，没有业务语义（后端不校验它，形态不合规
+    时回落到 _default 而不是拒绝整次提交）。允许 [a-z0-9_-]，长度 1–64。
+  */
+  const KIND = 'apply'
+
+  /*
+    草稿槽位。这只是**本活动内**的一段命名空间片段：真正写进 localStorage 的键由
+    宿主用「活动标识 + 这个片段」拼成，活动标识取自宿主自身路由，页面伪造不了。
+    所以这个页面既指不到别的活动的数据，也碰不到宿主自己的键。
+
+    形态受限：1–64 位小写字母、数字、- 或 _，且以字母或数字开头。不合规时宿主抛
+    storage_key_invalid 且**不回落** —— 回落会让两个本来不同的槽位撞在一起互相覆盖。
+  */
+  const DRAFT_KEY = 'apply'
+
+  /*
+    已提交标记的槽位。存的是**这个浏览器**的一个 uuid，用来在下次打开时认出
+    "你已经交过了"，于是不再显示填表界面。键的形态限制同 DRAFT_KEY。
+
+    它是**纯客户端的**，别指望它拦得住谁：清掉站点数据、换个浏览器、换台设备，同一个人
+    都会重新看到表单。真正的限制在服务端的 max_per_submitter（每人份数上限），而那条对
+    匿名提交也只是建议性的 —— 匿名标识由客户端自报，换一个就是一个新的提交者
+    （见 docs/submission-contract.md）。
+
+    所以这里不做任何"防绕过"的努力，它只省掉一次无谓的重复填写；而**草稿与它分开两个
+    槽位**是刻意的：草稿是"填到一半"，标记是"已经交过"，两者会同时存在。
+  */
+  const SUBMITTED_KEY = 'submitted'
+
+  /** 草稿存盘的去抖窗口。见 scheduleDraft() 的说明。 */
+  const DRAFT_DEBOUNCE_MS = 400
+
+  // ------------------------------------------------------------------
+  // 元素
+  // ------------------------------------------------------------------
+
+  const meta = document.getElementById('meta')
+  const gate = document.getElementById('gate')
+  const form = document.getElementById('form')
+  const msg = document.getElementById('msg')
+  const submitButton = document.getElementById('submit')
+  const done = document.getElementById('done')
+  const doneId = document.getElementById('done-id')
+
+  // ------------------------------------------------------------------
+  // 小工具
+  // ------------------------------------------------------------------
+
+  function setMeta(text, tone) {
+    meta.textContent = text
+    meta.dataset.tone = tone || ''
+  }
+
+  function showMessage(text, tone) {
+    msg.textContent = text
+    msg.dataset.tone = tone || ''
+    msg.hidden = false
+  }
+
+  function clearMessage() {
+    msg.hidden = true
+    msg.textContent = ''
+    msg.dataset.tone = ''
+  }
+
+  function setFieldError(key, text) {
+    const target = form.querySelector('[data-err="' + key + '"]')
+    if (!target) return
+    target.textContent = text
+    target.hidden = false
+    const input = form.elements[key]
+    if (input && input.setAttribute) input.setAttribute('aria-invalid', 'true')
+  }
+
+  function clearFieldErrors() {
+    for (const target of form.querySelectorAll('[data-err]')) {
+      target.hidden = true
+      target.textContent = ''
+    }
+    for (const input of form.querySelectorAll('[aria-invalid]')) {
+      input.removeAttribute('aria-invalid')
+    }
+  }
+
+  /**
+   * 把后端给的时间当 **UTC** 解析。
+   *
+   * 后端按约定统一存 UTC，但 SQLAlchemy 里是**裸 datetime**，Pydantic 序列化出来
+   * 不带时区后缀（`2026-09-01T00:00:00`）。这种字符串 `Date.parse` 会按**本地时间**
+   * 解释，于是在 UTC+8 的机器上截止时间凭空晚 8 小时 —— 页面显示"还能报名"，
+   * 实际后端已经判 403 了。所以没有时区后缀时补一个 `Z`。
+   */
+  function parseUtc(value) {
+    if (typeof value !== 'string' || value === '') return null
+    const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(value)
+    const ms = Date.parse(hasZone ? value : value + 'Z')
+    return Number.isNaN(ms) ? null : ms
+  }
+
+  function formatMoment(ms) {
+    return new Date(ms).toLocaleString('zh-CN', { hour12: false })
+  }
+
+  /**
+   * 页头那行状态：登录态，外加截止时间（有的话）。
+   *
+   * **刻意不写剩余名额。** 那个数字对报名的人没有指导意义 —— 它会让人盯着一个随时在变的
+   * 数，而真正需要被表达的只有"名额已满"这一个**终态**，那由 renderGate 单独给出。
+   * 数字本身也只在页面加载那一刻准确，放久了反而误导。
+   */
+  function describeMeta(currentIdentity, closeAt) {
+    const who = currentIdentity.loggedIn
+      ? '已登录：' + currentIdentity.displayName
+      : '未登录（匿名报名）'
+    return closeAt === null ? who : who + ' · 截止 ' + formatMoment(closeAt)
+  }
+
+  /**
+   * 生成一个 uuid。两处用到它：幂等键，以及"这个浏览器已经交过"的标记。
+   *
+   * `crypto.randomUUID()` 只在**安全上下文**可用。这个平台未必总跑在 https 上
+   * （内网 http 部署很常见），那时它是 undefined，直接调用会让整页在提交时炸掉。
+   * 退化出来的值唯一性够用：这两处都只要求"不撞车"，不要求不可猜测 —— 幂等键不参与
+   * 鉴权，而那个提交标记也只是本机的一个记号。
+   */
+  function newUuid() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+    return 'k' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12)
+  }
+
+  // 一次填写 = 一个提交意图。见 submit 处理里的说明：**不要**每次点击都换新键。
+  let intentKey = newUuid()
+
+  // ------------------------------------------------------------------
+  // 页面状态
+  // ------------------------------------------------------------------
+
+  /** 显示一个终态，并把表单收起来。文案一律用 textContent，不拼 HTML。 */
+  function renderGate(title, detail, action) {
+    gate.textContent = ''
+    const heading = document.createElement('h2')
+    heading.textContent = title
+    gate.appendChild(heading)
+    if (detail) {
+      const line = document.createElement('p')
+      line.textContent = detail
+      gate.appendChild(line)
+    }
+    if (action) {
+      const actions = document.createElement('div')
+      actions.className = 'actions'
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = action.label
+      button.addEventListener('click', action.onClick)
+      actions.appendChild(button)
+      gate.appendChild(actions)
+    }
+    form.hidden = true
+    gate.hidden = false
+    submitButton.disabled = true
+  }
+
+  function showDone(submissionId) {
+    form.hidden = true
+    gate.hidden = true
+    done.hidden = false
+    doneId.textContent = ''
+    const label = document.createElement('span')
+    label.textContent = '提交编号 '
+    doneId.appendChild(label)
+    doneId.appendChild(document.createTextNode('#' + submissionId))
+    done.scrollIntoView({ block: 'nearest' })
+  }
+
+  // ------------------------------------------------------------------
+  // 取值与校验
+  // ------------------------------------------------------------------
+
+  function collect() {
+    const data = new FormData(form)
+    return {
+      name: String(data.get('name') || '').trim(),
+      grade: String(data.get('grade') || '').trim(),
+      qq: String(data.get('qq') || '').trim(),
+      // 同名的多选框：getAll 拿到全部勾中的值
+      directions: data.getAll('directions').map(String),
+      intro: String(data.get('intro') || '').trim(),
+    }
+  }
+
+  /**
+   * 客户端校验。
+   *
+   * 后端对 payload **不做字段级契约**（提交内容的结构由活动自己决定），所以"QQ 号
+   * 是不是一串数字"这类判断只能在这一页做 —— 期待服务端返回 validation_failed 是错的，
+   * 它不会。
+   *
+   * 返回 `{字段: 消息}`；空对象表示通过。
+   */
+  function validate(values) {
+    const fields = {}
+    if (!values.name) fields.name = '请填写姓名。'
+    if (!values.grade) fields.grade = '请选择年级。'
+    if (!values.qq) {
+      fields.qq = '请填写 QQ 号。'
+    } else if (!/^\d{5,12}$/.test(values.qq)) {
+      // QQ 号是纯数字，最短 5 位、现有最长 12 位。放宽到"数字即可"也能跑，
+      // 但那样一个手滑打进去的手机号也会被当成 QQ 号，后面拉群时才发现。
+      fields.qq = 'QQ 号应为 5–12 位数字。'
+    }
+    if (values.directions.length === 0) fields.directions = '请至少选择一个意向方向。'
+    return fields
+  }
+
+  // ------------------------------------------------------------------
+  // 草稿：沙箱里没有 localStorage，由宿主按活动代存
+  // ------------------------------------------------------------------
+
+  let draftTimer = null
+
+  /**
+   * 去抖之后再把草稿交给宿主。
+   *
+   * 每次按键都往返一次宿主没有意义：写的是宿主自己的 localStorage，省不下什么，
+   * 却会把每输入一个字符变成一次 RPC。400ms 足够让"停下来想一下"就落盘。
+   */
+  function scheduleDraft() {
+    if (draftTimer) clearTimeout(draftTimer)
+    draftTimer = setTimeout(saveDraft, DRAFT_DEBOUNCE_MS)
+  }
+
+  function saveDraft() {
+    if (draftTimer) {
+      clearTimeout(draftTimer)
+      draftTimer = null
+    }
+    if (!CEA.identity()) return // 还没握手，宿主不会应答
+
+    const values = collect()
+    // 全空就不必占槽位了
+    const empty = !values.name && !values.grade && !values.qq
+      && values.directions.length === 0 && !values.intro
+    if (empty) return
+
+    /*
+      草稿只是便利功能，存不下不该挡住报名 —— 所以这里**刻意吞掉错误**。
+      会走到这里的两类失败：storage_too_large（本活动总量超 4096 字符）与
+      storage_key_invalid（key 不合规，那是页面自己的 bug，改 DRAFT_KEY）。
+    */
+    CEA.storage.save(DRAFT_KEY, values).catch(() => {})
+  }
+
+  function restoreDraft(values) {
+    if (!values || typeof values !== 'object') return false
+    if (typeof values.name === 'string') form.elements.name.value = values.name
+    if (typeof values.grade === 'string') form.elements.grade.value = values.grade
+    if (typeof values.qq === 'string') form.elements.qq.value = values.qq
+    if (typeof values.intro === 'string') form.elements.intro.value = values.intro
+    const picked = Array.isArray(values.directions) ? values.directions : []
+    for (const box of form.elements.directions) {
+      box.checked = picked.includes(box.value)
+    }
+    return true
+  }
+
+  // ------------------------------------------------------------------
+  // 与宿主握手
+  // ------------------------------------------------------------------
+
+  /*
+    先确认 SDK 真的到位。
+
+    少了这一道，"SDK 没加载"的表现是**整页停在"正在与宿主建立连接…"**：下面那句
+    `CEA.ready` 会抛 ReferenceError，异步函数里的它变成一个没人接的 rejection，
+    页面既不报错也不前进。宿主那边 5 秒后确实会提示"缺少桥接脚本"，但用户看到的是
+    两块互不相关的信息。
+
+    会走到这里的两种情况（都不是这一页的 bug）：
+      - dist/sdk/v1/cea.js 没构建（前端没跑过 build:sdk）
+      - CONTENT_SDK_INJECT 被关掉，而页面自己也没写那一行
+  */
+  if (typeof CEA === 'undefined') {
+    setMeta('报名组件没有加载', 'error')
+    renderGate(
+      '页面没能初始化',
+      '没有取到桥接脚本 /sdk/v1/cea.js。若是自己部署的实例，' +
+      '请确认前端产物里有这个文件。',
+    )
+    return
+  }
+
+  let identity
+  try {
+    // 拿不到就说明没有宿主（直接打开内容地址）
+    identity = await CEA.ready
+  } catch (error) {
+    setMeta('未连接到宿主：' + error.message, 'error')
+    renderGate(
+      '这一页要在平台里打开',
+      '当前页面没有收到宿主的握手响应。请从社团活动网站的入口进入，' +
+      '而不是直接打开内容地址 —— 报名要经宿主代发，单开这一页提交不了。',
+    )
+    return
+  }
+
+  setMeta(
+    identity.loggedIn
+      ? '已登录：' + identity.displayName + '（' + identity.role + '）'
+      : '未登录（可以匿名报名）',
+    'ok',
+  )
+
+  // ---- 活动公开信息 ----
+  let event
+  try {
+    event = await CEA.event()
+  } catch (error) {
+    setMeta('读取活动信息失败：' + (error.message || error.code), 'error')
+    renderGate('暂时打不开这个活动', '请稍后刷新重试。')
+    return
+  }
+
+  const quota = event.quota || {}
+  const closeAt = parseUtc(event.submissions_close_at)
+  const openAt = parseUtc(event.submissions_open_at)
+  const now = Date.now()
+
+  /*
+    终态判断放在**本地**，是为了不让用户先填完整张表再被告知"已截止"。
+    真正的权威仍然是后端：它会在提交时再判一次并回 event_closed，
+    所以这里的判断即便因时钟偏差出错，也不会放进一条不该收的提交。
+  */
+  if (openAt !== null && now < openAt) {
+    renderGate('报名还没开始', '开放时间：' + formatMoment(openAt) + '。')
+  } else if (closeAt !== null && now > closeAt) {
+    renderGate('报名已截止', '截止时间：' + formatMoment(closeAt) + '。')
+  } else if (quota.remaining === 0) {
+    renderGate('名额已满', '这个活动已经收满了，感谢关注。')
+  } else if (event.submission_requires_login && !identity.loggedIn) {
+    // 宿主在发出请求之前也会短路成 login_required，这里提前拦一次只是为了少一次无效往返
+    renderGate('这个活动需要登录后才能报名', '登录后回到这一页继续填写。', {
+      label: '去登录',
+      // 只接受站内路径；外部地址会被宿主忽略
+      onClick: () => CEA.navigate('/login'),
+    })
+  } else {
+    /*
+      已经交过就不显示表单。
+
+      标记**存在即视为已提交**，不校验里面的内容 —— 它只可能由上面那次成功提交写进去，
+      而"读得到但读不懂"（比如被手工改坏）时宁可当作已提交：重新显示表单会让人再交一份，
+      而多一条记录是可恢复的，误判成"没交过"却要本人再填一遍。这与服务端"宁可多一条记录
+      也不静默吞掉提交"是同一条取舍。
+
+      读不到（超限、存储不可用）时不会抛，宿主那边返回 null，于是照常显示表单。
+    */
+    const submitted = await CEA.storage.load(SUBMITTED_KEY).catch(() => null)
+    if (submitted) {
+      setMeta(describeMeta(identity, closeAt), 'ok')
+      showDone(submitted && submitted.submissionId !== undefined ? submitted.submissionId : '—')
+      return
+    }
+
+    form.hidden = false
+
+    // 登录态与截止时间落在页头上，填表时不用回去翻
+    setMeta(describeMeta(identity, closeAt), 'ok')
+
+    // ---- 恢复草稿 ----
+    // 超限或格式坏掉时宿主会抛错；草稿拿不回来不该挡住填写，所以吞掉
+    const draft = await CEA.storage.load(DRAFT_KEY).catch(() => null)
+    if (restoreDraft(draft)) showMessage('已恢复上次没提交的内容。', '')
+
+    // input：连续输入，去抖后存
+    form.addEventListener('input', scheduleDraft)
+    // change：下拉与勾选是离散动作，立刻存，别等窗口过去
+    form.addEventListener('change', saveDraft)
+  }
+
+  // ------------------------------------------------------------------
+  // 提交
+  // ------------------------------------------------------------------
+
+  form.addEventListener('submit', async (submitEvent) => {
+    submitEvent.preventDefault()
+    clearFieldErrors()
+    clearMessage()
+
+    const values = collect()
+    const fields = validate(values)
+    if (Object.keys(fields).length > 0) {
+      for (const [key, text] of Object.entries(fields)) setFieldError(key, text)
+      showMessage('请先补全标红的项。', 'error')
+      const firstBad = form.querySelector('[aria-invalid="true"]')
+      if (firstBad && firstBad.focus) firstBad.focus()
+      return
+    }
+
+    /*
+      提交之后改不了，所以确认一次。
+
+      走 CEA.confirm 而不是原生 confirm()：它渲染在宿主的界面里，主题统一，
+      而且原生对话框会阻塞整个页面的脚本。注意它是**异步**的，必须 await。
+      用户点取消、按 Esc 或 20 秒无人应答，都正常返回 false（不抛错）。
+
+      danger: true 让宿主把初始焦点放在"取消"上 —— 这一次点击是不可撤销的，
+      默认落在更安全的那个按钮上更合适。
+    */
+    let confirmed = true
+    try {
+      confirmed = await CEA.confirm('提交后无法自行修改，确定现在提交吗？', {
+        title: '确认提交',
+        confirmText: '确认提交',
+        cancelText: '再检查一下',
+        danger: true,
+      })
+    } catch (error) {
+      // 宿主没提供确认框、或请求过于频繁（一分钟 6 次）。这两种都不该让报名交不出去
+      confirmed = true
+    }
+    if (!confirmed) return
+
+    submitButton.disabled = true
+    showMessage('提交中…', '')
+
+    // 管理端列表里显示的摘要行。$ 前缀是刻意选的：活动自己的字段很难叫这个名字。
+    // 它**只影响列表那一行** —— 点开详情的对话框仍然给出完整 JSON。
+    // 另外它是纯文本渲染，塞标记进去既不会生效也没意义。
+    const display = [
+      values.name,
+      values.grade,
+      'QQ ' + values.qq,
+      values.directions.join('/'),
+    ].filter(Boolean).join(' · ')
+
+    try {
+      /*
+        带不带文件都是**同一次调用**：SDK 会按有无 files 自动选 JSON 端点还是
+        multipart 端点。这一页不收文件，所以走的永远是前者。
+      */
+      const result = await CEA.submit({
+        payload: {
+          $display: display,
+          name: values.name,
+          grade: values.grade,
+          qq: values.qq,
+          directions: values.directions,
+          intro: values.intro,
+        },
+        kind: KIND,
+        /*
+          幂等键标识的是**一次提交意图**，不是一次点击 —— 所以它在页面加载时生成
+          一次，成功后重新生成，而不是每次点击都新建。
+
+          每次点击都换新键的话，服务端无从判断两次点击其实是同一次提交，键就挡不住
+          连点，只剩下面的禁用按钮兜着。这里配合禁用按钮，两层都留着。
+        */
+        idempotencyKey: intentKey,
+      })
+
+      // 命中幂等：服务端认出这是同一次意图的重传，没有新建记录
+      const submission = result && result.submission ? result.submission : {}
+      const id = submission.id !== undefined ? submission.id : '—'
+
+      if (result && result.deduplicated) {
+        showDone(id)
+      } else {
+        showDone(id)
+        // 只在这一处用宿主通知：成功是唯一值得写进平台通知栈的时刻
+        // （它替代的正是被沙箱挡掉的那种 alert('提交成功')）。十秒内最多 5 条，
+        // 而一个提交意图只会走到这里一次，配额不会有压力。
+        CEA.toast('报名已提交，提交编号 #' + id, 'ok')
+      }
+
+      /*
+        记下"这个浏览器已经交过"，下次打开就不再显示表单。
+
+        存不下也不影响这次提交已经成功 —— 代价只是下次重新显示表单，所以吞掉错误
+        （`storage_too_large` 在这里几乎不可能出现，但存储本身不可用是可能的）。
+      */
+      await CEA.storage
+        .save(SUBMITTED_KEY, { uuid: newUuid(), submissionId: id, at: Date.now() })
+        .catch(() => {})
+
+      // 这次意图结束了，下一次填写是新的意图。
+      // 保留这一行是因为它是一条**不变量**（"成功后换新键"），而不是因为当前还有
+      // 再填一次的入口 —— 上面那条标记已经把表单收掉了。
+      intentKey = newUuid()
+      form.reset()
+      clearFieldErrors()
+      clearMessage()
+      // 草稿已经变成正式提交，没必要再留着
+      await CEA.storage.remove(DRAFT_KEY).catch(() => {})
+    } catch (error) {
+      /*
+        活动页**不需要解析 HTTP 状态码**：宿主已经把后端错误映射成可区分的 code。
+        处理的原则只有一条 —— 分清"终态"与"稍后重试"。
+      */
+      switch (error.code) {
+        case 'login_required':
+          // 竞态：页面加载时是登录的，提交前登出了
+          setMeta('登录状态已失效', 'error')
+          renderGate('需要重新登录', '登录后回到这一页继续填写。', {
+            label: '去登录',
+            onClick: () => CEA.navigate('/login'),
+          })
+          break
+
+        case 'event_closed':
+          // 终态：未发布 / 未到开放时间 / 已截止。**停止**，别再让他试
+          renderGate('报名已截止', '这个活动现在不接受提交了。')
+          break
+
+        case 'quota_exhausted':
+          // 终态：整个活动没位置了。与下面那条刻意分开 —— 可采取的行动完全不同
+          renderGate('名额已满', '这个活动已经收满了，感谢关注。')
+          break
+
+        case 'submitter_quota_exhausted':
+          // 终态：你不能再交了，别人还可以。这一条通常意味着活动限每人 1 份
+          renderGate('你已经提交过了', '这个活动限制每人提交的份数，不能再交一份。' +
+            '需要修改的话请联系管理员。')
+          break
+
+        case 'rate_limited':
+          // 唯一值得重试的。429 与 409 的区别是刻意的
+          showMessage('提交得有点频繁，请稍等一会儿再试。', 'error')
+          submitButton.disabled = false
+          break
+
+        case 'payload_too_large':
+          showMessage('内容太长了，精简一下再提交。', 'error')
+          submitButton.disabled = false
+          break
+
+        case 'validation_failed': {
+          // fields 里是字段级消息，标到对应输入框上；没有就只说"检查一下"
+          const fields = error.fields || {}
+          const keys = Object.keys(fields)
+          for (const key of keys) setFieldError(key, fields[key])
+          showMessage(
+            keys.length > 0
+              ? '请先补全标红的项。'
+              : (error.message || '提交的内容没通过校验。'),
+            'error',
+          )
+          submitButton.disabled = false
+          break
+        }
+
+        case 'timeout':
+          showMessage('等宿主回应超时了，请重试。', 'error')
+          submitButton.disabled = false
+          break
+
+        case 'cancelled':
+          // 请求被取消或 iframe 被重新加载。忽略即可，不必打扰用户
+          submitButton.disabled = false
+          break
+
+        default:
+          showMessage(error.message || '提交失败，请稍后重试。', 'error')
+          submitButton.disabled = false
+      }
+    }
+  })
+
+  /*
+    这里原本有一个「再填一份」按钮，已经移除。
+
+    移除的理由不是省一处按钮，而是它与新的语义冲突：提交成功后会把"这个浏览器已经交过"
+    写进宿主存储，页面下次打开（以及本次成功之后）都不再显示表单。留一个能把它翻回来的
+    按钮，就等于让页面自己绕过自己的规则 —— 而那条规则要挡的正是重复提交。
+
+    想再交一份（比如帮别人代填），清掉本站数据即可，页面会重新显示表单。这条路刻意不在
+    界面上提供：它是一个例外操作，不该和"正常报名"并排摆着。
+  */
+})()
+</script>
+
+</body>
+</html>
