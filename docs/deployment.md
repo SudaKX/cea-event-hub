@@ -23,16 +23,27 @@ sudo -u cea cp backend/.env.example backend/.env
 sudo -u cea $EDITOR backend/.env
 ```
 
-`.env` 里有**两项在生产环境必须设置**：
+`.env` 里有**四项在生产环境必须逐字核对**。前三项写错会立刻暴露，第四项不会 —— 它只会
+静静地把人引到错的地方：
 
 ```ini
 APP_ENV=production
+
 # 未加盐的 IPv4 哈希可在数秒内被暴力反查，等于明文存储客户端地址。
 # 不设置这一项应用会拒绝启动 —— 这是刻意的。
 IP_HASH_SALT=<足够长的随机串>
+
 # 生产必须保持 true
 SESSION_COOKIE_SECURE=true
+
+# **邮件链接的基址**，必须是**前端站点**的 origin（不是 API 的）。
+# 它错了不会报任何错：注册照常返回"请查收邮件"，而信里的链接指向 localhost。
+# 用户点开是空白页，你会以为是邮件服务的问题。
+PUBLIC_BASE_URL=https://<你的站点域名>
 ```
+
+监听地址（`API_HOST` / `API_PORT`）默认就是 `127.0.0.1:8000`。改端口时
+`deploy/nginx` 里**四处 `proxy_pass`** 要跟着改。
 
 ```bash
 # 3. 建库（在服务启动之前）
@@ -66,20 +77,31 @@ curl -fsS http://127.0.0.1:8000/api/v1/health
 sudo journalctl -u cea-api -n 30
 ```
 
-## 启动参数不是可选项
+## 启动方式，以及为什么参数不是可选项
 
 ```bash
-uvicorn app.main:app --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+.venv/bin/python -m app        # 生产：读 .env 里的 API_HOST / API_PORT
+uvicorn app.main:app --reload  # 开发：CLI 直起，可用 --reload
 ```
+
+生产的启动命令是 **`python -m app`**（`backend/app/__main__.py`），不是直接调 uvicorn。
+原因是监听地址要放在 `.env` 里，而 **uvicorn 读不到那份 `.env`**：它的 `--host`/`--port`
+是 CLI 参数，它的 `UVICORN_*` 环境变量也只从**进程环境**取值。所以把 `UVICORN_PORT`
+写进 `.env` 会被静默忽略 —— 服务照旧听 8000，没有任何报错。由应用读配置再显式传给
+uvicorn，这个错位就不存在了。
+
+三个参数**刻意写死在那个入口里**，不从 `.env` 取：
 
 | 参数 | 作用 | 不配置的后果 |
 |---|---|---|
-| `--workers 1` | 应用层限流是进程内实现 | 阈值被放大到 N 倍 |
-| `--proxy-headers` | 让应用读取转发头 | 限流键永远是 nginx 的地址 |
-| `--forwarded-allow-ips` | 限定只信任谁写的转发头 | 客户端可伪造 `X-Forwarded-For` 绕过限流 |
+| `workers=1` | 应用层限流是进程内实现 | 阈值被放大到 N 倍 |
+| `proxy_headers=True` | 让应用读取转发头 | 限流键永远是 nginx 的地址 |
+| `forwarded_allow_ips` | 限定只信任谁写的转发头 | 客户端可伪造 `X-Forwarded-For` 绕过限流 |
 
-第三条尤其重要：**没有它，应用层限流等于没有**。它的取值必须与 nginx 的
-`real_ip` 配置一致。
+第三条尤其重要：**没有它，应用层限流等于没有**。它现在由 `TRUSTED_PROXY_IPS`
+**推导**（`app/__main__.py`），而不是与 nginx 各写一份 —— 原先那种写法要求两处人工保持
+一致，而"要求一致"的下一站通常是"某天不再一致"。它的取值必须与 nginx 的 `real_ip`
+配置一致（若前面有 CDN）。
 
 ## 四个必须同时正确的配置面
 

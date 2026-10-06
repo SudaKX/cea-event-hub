@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     PUBLIC_BASE_URL: str = "http://localhost:5173"
     # 承载活动页的宿主来源，供桥接层与 CORS 判定使用
     APP_ORIGIN: str = "http://localhost:5173"
+    #: 后端**绑定**的地址与端口。由 `python -m app` 读取并交给 uvicorn。
+    #:
+    #: 为什么不直接用 uvicorn 的 `--host/--port`：那两个是它的 CLI 参数，而它的
+    #: `auto_envvar_prefix="UVICORN"` 只从**进程环境**取值 —— **它不会读 `backend/.env`**。
+    #: 于是"把 UVICORN_PORT 写进 .env"会得到一个很坏的错位：pydantic 读得到、
+    #: uvicorn 读不到，服务照旧听 8000，且不报任何错。所以监听地址走应用自己的配置。
+    #:
+    #: **生产建议保持 `127.0.0.1`。** 它意味着后端只监听回环，外部唯一入口是 nginx；
+    #: 改成 `0.0.0.0` 或公网地址会让后端直接暴露，绕过 nginx 的限流、体积闸与 TLS。
+    #: 端口则可以随意改，但 nginx 的四处 `proxy_pass` 必须跟着改（见 deploy/）。
+    API_HOST: str = "127.0.0.1"
+    API_PORT: int = 8000
 
     # ---------- 路径 ----------
     DATABASE_URL: str = f"sqlite+pysqlite:///{(REPO_ROOT / 'var' / 'app.db').as_posix()}"

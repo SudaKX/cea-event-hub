@@ -67,6 +67,12 @@ NOT_SETTINGS = {
     "SQLALCHEMY",
     "ALEMBIC",
     "UVICORN",
+    # uvicorn **自己**的环境变量（它用 click 的 auto_envvar_prefix="UVICORN" 生成）。
+    # 它们不是本应用的配置项，但部署文档必须提到它们 —— 因为"把它们写进 .env 会被
+    # 静默忽略"正是文档要讲清的那个坑：uvicorn 只从进程环境取值，不读 .env。
+    # 本应用对应的配置项是 API_HOST / API_PORT。
+    "UVICORN_HOST",
+    "UVICORN_PORT",
     "NGINX",
     "SYSTEMD",
     "SQLITE3",

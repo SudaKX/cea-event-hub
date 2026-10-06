@@ -11,24 +11,29 @@ Group=cea
 WorkingDirectory=/srv/cea/backend
 
 # ---------------------------------------------------------------------------
-# 三个启动参数各自对应一条硬约束，改动前请先读 docs/deployment.md：
+# 启动方式：`python -m app`（见 backend/app/__main__.py）
+#
+# 用它而不是 `uvicorn app.main:app --host … --port …`，是因为监听地址要放到
+# `.env` 里：uvicorn 的 --host/--port 是 CLI 参数，而它的 UVICORN_* 环境变量只从
+# **进程环境**取值、不读 .env —— 写进 .env 会被静默忽略，服务照旧听 8000。
+#
+# 三个硬约束（--workers 1 / --proxy-headers / --forwarded-allow-ips）**刻意写死在
+# 那个入口里**，不从 .env 取：它们各自对应一条防线，做成可配置等于把绕过去的开关
+# 交出去。理由见 docs/deployment.md 的「启动参数不是可选项」。
 #
 #   --workers 1
 #       应用层限流是进程内内存实现。多进程会让每个进程各持一份计数，
 #       实际阈值被放大到 N 倍。SQLite 的写入本来就串行化在单写者锁上，
 #       多进程只会增加锁争用而不提升写入吞吐，因此单进程与存储模型也一致。
 #
-#   --proxy-headers --forwarded-allow-ips
+#   proxy_headers / forwarded_allow_ips
 #       只信任 nginx 写入的转发头。不配置的话，客户端自己发一个
 #       X-Forwarded-For 就能把限流键算到伪造地址上，应用层限流形同虚设。
-#       这里的地址必须与 nginx 的 real_ip / proxy 配置保持一致。
+#       forwarded_allow_ips 由 TRUSTED_PROXY_IPS 推导，两者不再需要人工同步。
+#
+# 监听地址请在 .env 里设 API_HOST / API_PORT（生产建议保持 127.0.0.1）。
 # ---------------------------------------------------------------------------
-ExecStart=/srv/cea/.venv/bin/uvicorn app.main:app \
-    --host 127.0.0.1 \
-    --port 8000 \
-    --workers 1 \
-    --proxy-headers \
-    --forwarded-allow-ips 127.0.0.1
+ExecStart=/srv/cea/.venv/bin/python -m app
 
 # 环境变量从 .env 读取（该文件不入库，含 IP_HASH_SALT 等密钥）
 EnvironmentFile=/srv/cea/backend/.env
