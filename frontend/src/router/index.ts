@@ -19,6 +19,18 @@ import { useAuthStore } from '@/stores/auth'
  * `/api`、`/content`、`/data`、`/sdk`、`/assets` 实际上由 nginx 或后端处理、
  * 根本到不了前端路由，但仍然列在这里：一是让这份清单成为完整的"平台保留字"，
  * 二是防止开发环境下 Vite 代理配置变化时它们意外落到活动路由上。
+ *
+ * `/draft` 与 `/develop` 同理，它们都**只在开发模式下有意义**：
+ *
+ * - `/draft`：草稿活动内容，由后端在开发模式下挂载（见 docs/dev-harness.md）。
+ *   前端路由不注册它 —— 它是服务端路径，和后端的 `/content` 是同一类东西。
+ * - `/develop`：开发调试台。它**是**一条前端路由，但只在开发构建里注册
+ *   （见下方 routes 的说明）。
+ *
+ * 清单是构建期常量、**不随构建模式变化**：让它在生产里少两项，会使"哪些标识不能
+ * 用作活动"在不同构建下不一致 —— 同一个标识在开发环境是活动、在生产环境是别的。
+ * 代价是活动标识不能再叫 `draft` 或 `develop`，与 `content`、`data`、`sdk` 已付出
+ * 的代价同类。
  */
 export const RESERVED_PREFIXES = [
   'admin',
@@ -33,6 +45,8 @@ export const RESERVED_PREFIXES = [
   'data',
   'sdk',
   'assets',
+  'draft',
+  'develop',
 ] as const
 
 export function isReservedPath(path: string): boolean {
@@ -153,6 +167,29 @@ const routes: RouteRecordRaw[] = [
     meta: { public: true },
   },
 ]
+
+/*
+  开发调试台：**只在开发构建里注册**（见 docs/dev-harness.md）。
+
+  两条约束，缺一条这个守卫就形同虚设：
+
+  1. 条件必须是**构建期常量**。生产构建里它被替换成 `false`，整个分支连同下面那句
+     动态 `import` 一起被删除，于是调试台既不注册路由、也不产出 chunk。
+  2. 本文件里**不能出现对该组件的静态引入**（哪怕只是为了取一个类型）。静态引入会
+     把组件拉进产物，而守卫不会有任何报错 —— 产物里就是多了一个块而已。
+
+  这条性质不能靠单元测试钉住：测试环境里开发判据为真、生产构建里为假，也就是说
+  **测试看到的路由表和生产的不是同一张**。验收方式是构建后在产物里检索只属于调试台
+  的标记串，见 change 的 tasks 5.1 / 5.2。
+*/
+if (import.meta.env.DEV) {
+  routes.push({
+    path: '/develop',
+    name: 'develop',
+    component: () => import('@/views/develop/DevelopView.vue'),
+    meta: { public: true },
+  })
+}
 
 export const router = createRouter({
   // history 模式：服务端已配置 history fallback，深层路径可直接打开

@@ -325,8 +325,37 @@ cd backend && ../.venv/Scripts/python.exe -m uvicorn app.main:app --reload
 cd frontend && npm run dev
 ```
 
-把活动页放进 `content/{event_id}/index.html`，然后访问
-`http://localhost:5173/{event_id}`。
+**把活动页放进 `events/<名字>/index.html`**（这个目录入库，是作者的工作台），然后打开
+调试台：
 
-Vite 会把 `/api` 与 `/content` 代理到后端，因此开发环境与生产**同源** —— 这一点
-很重要，跨源开发会掩盖真实的沙箱与 CORS 行为。
+```
+http://localhost:5173/develop?src=/draft/<名字>/index.html
+```
+
+调试台用**与生产同一份宿主实现**承载你的页面，并给出一块面板：双向消息日志、握手状态、
+可以主动发出的宿主侧消息，以及按操作拦截伪造失败的能力。它加载的就是
+`/draft/<名字>/` —— 也就是你刚放进 `events/` 的那份文件。
+
+完整说明见 `docs/dev-harness.md`。
+
+### 为什么不是放进 `content/{event_id}/`
+
+`content/` 是**投放产物**目录：它不入库，而且下一次 zip 投放会把它**整体替换**掉 ——
+你手写在那里的文件会消失。作者的工作台恰好是部署的目标位置，这是之前最容易踩的坑。
+
+两者都装活动页，但装的是不同阶段的东西：
+
+| | `events/` | `content/` |
+|---|---|---|
+| 是什么 | 活动页**源码** | **投放产物** |
+| 谁写进去 | 你，直接编辑 | 管理台上传 zip 后解压而来 |
+| 版本控制 | 入库 | 排除 |
+| 服务地址 | `/draft/**`，**仅开发模式** | `/content/**` |
+
+`events/` **不是**第二条投放路径：上线仍然只走管理台 zip。
+
+> 想按活动标识看"投放之后长什么样"，把页面放进 `content/{event_id}/index.html` 再访问
+> `http://localhost:5173/{event_id}` 仍然可行 —— 但那是验证投放结果，不是写页面的方式。
+
+Vite 会把 `/api`、`/content` 与 `/draft` 代理到后端，因此开发环境与生产**同源** ——
+这一点很重要，跨源开发会掩盖真实的沙箱与 CORS 行为。

@@ -73,8 +73,38 @@ describe('保留前缀', () => {
   })
 })
 
-describe('静态路径赢过活动路由', () => {
-  it('核销页匹配到自己的路由，而不是被当成活动标识', async () => {
+describe('开发专用的两个前缀', () => {
+  /*
+    这两条把"清单与路由表两侧一致"那条要求扩展到开发专用的路径上。
+
+    `develop` 是**一条只在开发构建里注册的路由**，而保留前缀清单是构建期常量、
+    不随构建模式变化（理由见 index.ts）。因此在测试环境（开发判据为真）里，
+    它必须同时出现在两处 —— 而上面那条"路由表里的每个静态顶层路径都登记在清单里"
+    已经会强制这一点，这里再显式钉一次，是为了让失败信息直接指向原因。
+  */
+  it('develop 同时出现在路由表与保留前缀清单里', () => {
+    const paths = router.getRoutes().map((route) => route.path)
+
+    expect(paths, '调试台路由没有注册').toContain('/develop')
+    expect(RESERVED_PREFIXES, 'develop 没登记进保留前缀').toContain('develop')
+  })
+
+  it('draft 只登记在保留前缀清单里（它由服务端处理，前端不注册路由）', () => {
+    const paths = router.getRoutes().map((route) => route.path)
+
+    expect(RESERVED_PREFIXES).toContain('draft')
+    expect(paths).not.toContain('/draft')
+  })
+
+  it('调试台路径不会被当成活动标识', async () => {
+    await router.push('/develop?src=/draft/demo/index.html')
+
+    expect(String(router.currentRoute.value.name)).toBe('develop')
+    expect(router.currentRoute.value.params.eventId).toBeUndefined()
+  })
+})
+
+describe('静态路径赢过活动路由', () => {  it('核销页匹配到自己的路由，而不是被当成活动标识', async () => {
     /*
       顶层路径一律解释为活动标识。静态段的具体度高于动态段，因此核销页赢 ——
       否则邮件里的链接会打开一个"活动不存在"的页面，而路由表看上去完全正常。

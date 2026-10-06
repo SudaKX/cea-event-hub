@@ -20,6 +20,7 @@ import { CONTENT_BASE } from '@/api/client'
 import { getPublicEvent } from '@/api/events'
 import { BridgeHost } from '@/bridge/host'
 import { getClientId } from '@/bridge/clientId'
+import { SANDBOX_TOKENS } from '@/bridge/sandbox'
 import { useConfirm, type ConfirmOptions } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { contentEntryExists } from './contentProbe'
@@ -105,9 +106,6 @@ function failLoading(message: string): void {
 }
 
 let host: BridgeHost | null = null
-
-/** 沙箱令牌集合。刻意**不含** allow-same-origin，见文件头说明。 */
-const SANDBOX_TOKENS = ['allow-scripts', 'allow-forms', 'allow-modals', 'allow-popups']
 
 const frameSrc = computed(() => {
   if (!event.value) return ''

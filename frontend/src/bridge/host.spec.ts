@@ -69,10 +69,17 @@ interface Harness {
 }
 
 function makeHost(
-  options: { loggedIn?: boolean; requiresLogin?: boolean; withoutConfirm?: boolean } = {},
+  options: {
+    loggedIn?: boolean
+    requiresLogin?: boolean
+    withoutConfirm?: boolean
+    /** 这些操作会被挂起（走拦截口子），其余照常转发 */
+    holdOps?: string[]
+  } = {},
 ): Harness {
   const iframe = makeIframe()
   const sent: Harness['sent'] = []
+  const holdOps = options.holdOps
 
   // 捕获宿主发出的消息
   const contentWindow = iframe.contentWindow as unknown as {
@@ -112,6 +119,8 @@ function makeHost(
     onToast,
     // 用来验证"宿主没提供确认框"那条分支 —— 只靠一个恒真的桩走不到那里
     ...(options.withoutConfirm ? {} : { onConfirm }),
+    // 只有传了 holdOps 才开拦截口子 —— 生产宿主不传，这里默认也不传
+    ...(holdOps ? { shouldHold: (op: string) => holdOps.includes(op) } : {}),
     requestTimeoutMs: 50,
     readyTimeoutMs: 20,
   })
@@ -926,5 +935,151 @@ describe('错误码映射（任务 13.9）', () => {
   it('已经是 BridgeError 时原样返回', () => {
     const original = new BridgeError(BRIDGE_ERROR.TIMEOUT, '超时')
     expect(mapApiError(original)).toBe(original)
+  })
+})
+
+/**
+ * 拦截口子（`shouldHold` / `onHold` / `forwardHeld` / `failHeld`）。
+ *
+ * 这是宿主上唯一一个**能拦住请求**的口子，开发调试台靠它做"看清内容再选择假响应或转发"。
+ * 这几条断言钉的是"拦得住、放得开"，因为它的失败方式很安静：请求被扣下不发，活动页那边
+ * 只是一直等，而服务端什么都没收到、没有任何日志。
+ */
+describe('拦截口子：挂起与结算', () => {
+  /*
+    自己一份 beforeEach 是必须的：文件里每个 describe 各自调 `vi.clearAllMocks()`，
+    而**清掉的是调用记录、不是实现**。不建自己的基线，就会继承上一个用例留下的桩
+    （比如一个永不兑现的 promise），于是失败信息指向"请求失败了"，而根因在测试隔离。
+  */
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getPublicEvent.mockResolvedValue(EVENT)
+  })
+
+  function ready(harness: Harness): void {
+    harness.host.start()
+    postFrom(harness.iframe.contentWindow, {
+      v: PROTOCOL_VERSION,
+      type: IFRAME_MESSAGE.READY,
+      payload: { protocolVersion: PROTOCOL_VERSION },
+    })
+    harness.sent.length = 0
+  }
+
+  it('命中的请求不进网络，也不进超时计时', async () => {
+    const harness = makeHost({ holdOps: [BRIDGE_OP.EVENT_INFO] })
+    ready(harness)
+
+    rpc(harness, BRIDGE_OP.EVENT_INFO, {}, 'r-held')
+    await flush()
+
+    // 关键：后端一次都没被调到，而且它不算"待决" —— 挂起的那些在等人，不该被计时
+    expect(getPublicEvent).not.toHaveBeenCalled()
+    expect(harness.host.heldCount).toBe(1)
+    expect(harness.host.pendingCount).toBe(0)
+
+    // 超时窗口（requestTimeoutMs: 50）过去之后它仍然挂在那儿，没有被判超时
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(harness.host.heldCount).toBe(1)
+    expect(
+      harness.sent.some(
+        (message) =>
+          message.type === HOST_MESSAGE.RESULT &&
+          (message.payload as { error?: { code?: string } }).error?.code ===
+            BRIDGE_ERROR.TIMEOUT,
+      ),
+    ).toBe(false)
+  })
+
+  it('未命中的操作照常转发', async () => {
+    const harness = makeHost({ holdOps: [BRIDGE_OP.EVENT_INFO] })
+    ready(harness)
+
+    rpc(harness, BRIDGE_OP.STORAGE_SAVE, { key: 'draft', value: 1 }, 'r-pass')
+    await flush()
+
+    expect(harness.host.heldCount).toBe(0)
+    const result = harness.sent.find((message) => message.id === 'r-pass')
+    expect((result?.payload as { ok?: boolean }).ok).toBe(true)
+  })
+
+  it('转发：真的发给后端，回的是后端的值', async () => {
+    const harness = makeHost({ holdOps: [BRIDGE_OP.EVENT_INFO] })
+    ready(harness)
+
+    rpc(harness, BRIDGE_OP.EVENT_INFO, {}, 'r-forward')
+    await flush()
+    expect(getPublicEvent).not.toHaveBeenCalled()
+
+    await harness.host.forwardHeld('r-forward')
+    await flush()
+
+    expect(getPublicEvent).toHaveBeenCalledTimes(1)
+    expect(harness.host.heldCount).toBe(0)
+    const result = harness.sent.find((message) => message.id === 'r-forward')
+    expect(result?.payload).toMatchObject({ ok: true })
+    expect((result?.payload as { data?: { id?: string } }).data?.id).toBe('spring-2026')
+  })
+
+  it('假响应：一次网络都不发，只回一条伪造的错误', async () => {
+    const harness = makeHost({ holdOps: [BRIDGE_OP.EVENT_INFO] })
+    ready(harness)
+
+    rpc(harness, BRIDGE_OP.EVENT_INFO, {}, 'r-fail')
+    await flush()
+
+    harness.host.failHeld('r-fail', {
+      code: BRIDGE_ERROR.TIMEOUT,
+      message: '伪造的超时',
+    })
+    await flush()
+
+    expect(getPublicEvent).not.toHaveBeenCalled()
+    expect(harness.host.heldCount).toBe(0)
+    const result = harness.sent.find((message) => message.id === 'r-fail')
+    expect(result?.payload).toMatchObject({
+      ok: false,
+      error: { code: BRIDGE_ERROR.TIMEOUT, message: '伪造的超时' },
+    })
+  })
+
+  it('结算一个不存在的挂起 id 时静默无事（可能已被结算或文档已换）', async () => {
+    const harness = makeHost({ holdOps: [BRIDGE_OP.EVENT_INFO] })
+    ready(harness)
+
+    harness.host.failHeld('never-held', { code: BRIDGE_ERROR.TIMEOUT, message: 'x' })
+    await harness.host.forwardHeld('never-held')
+    await flush()
+
+    expect(getPublicEvent).not.toHaveBeenCalled()
+    expect(harness.sent).toHaveLength(0)
+  })
+
+  it('iframe 重新加载后，挂起的请求被清掉', async () => {
+    const harness = makeHost({ holdOps: [BRIDGE_OP.EVENT_INFO] })
+    ready(harness)
+
+    rpc(harness, BRIDGE_OP.EVENT_INFO, {}, 'r-stale')
+    await flush()
+    expect(harness.host.heldCount).toBe(1)
+
+    // 换了一份文档：等它的那个 SDK 已经不在了，留着只会让计数虚高
+    harness.host.onIframeLoad()
+
+    expect(harness.host.heldCount).toBe(0)
+  })
+
+  it('不传 shouldHold 时，一切与加这个口子之前相同', async () => {
+    // 生产宿主就是这一档 —— 它是这个口子安全的唯一理由
+    const harness = makeHost()
+    ready(harness)
+
+    rpc(harness, BRIDGE_OP.EVENT_INFO, {}, 'r-plain')
+    await flush()
+
+    expect(harness.host.heldCount).toBe(0)
+    expect(getPublicEvent).toHaveBeenCalledTimes(1)
+    const result = harness.sent.find((message) => message.id === 'r-plain')
+    expect((result?.payload as { ok?: boolean }).ok).toBe(true)
   })
 })

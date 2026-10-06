@@ -72,6 +72,49 @@ export interface BridgeHostOptions {  iframe: HTMLIFrameElement
   requestTimeoutMs?: number
   /** 等待活动页就绪的时间 */
   readyTimeoutMs?: number
+  /**
+   * 观察宿主收发的每一条消息。**只读**。
+   *
+   * 入站在来源校验与信封校验**之后**调用，出站在真正 `postMessage` 的那一处调用，
+   * 因此它看到的与线上实际收发的是同一批消息。
+   *
+   * ## 为什么它必须保持只读
+   *
+   * 它存在的理由是开发调试台要能显示"活动页发了什么、宿主回了什么"—— 而出站那一半
+   * 没有别的地方能观测到：沙箱 iframe 不含 `allow-same-origin`，宿主对
+   * `contentWindow` 的属性访问会抛 SecurityError，所以包装 `postMessage` 是做不到的。
+   *
+   * 但它是**观测**口子，不是**行为**口子：返回 `void`，调用方忽略其结果。一旦有人让它
+   * 影响发送内容或跳过发送，调试台与生产宿主就不再是同一份实现了 —— 而那正是这套
+   * 调试设施存在的全部意义。与 `pendingCount` / `isHandshaken` 属于同一类东西。
+   */
+  onMessage?: (direction: 'in' | 'out', envelope: Envelope) => void
+  /**
+   * 是否**挂起**这次请求。返回 `true` 时宿主不转发，把它交给 `onHold` 等调用方决定。
+   *
+   * ## 这是行为口子，不是观测口子
+   *
+   * 与 `onMessage` 不同，它**能拦住一次请求**。这是开发调试台要"先看清请求内容，
+   * 再选择假响应或转发"所必需的 —— 没有它，"转发"就不成为一个选择（请求早就发出去
+   * 了），"观察后再决定"也无从谈起。
+   *
+   * 因此它的安全边界只有一条：**生产宿主不传它**（见 `event/EventView.vue`）。
+   * 不传时 `handleRpc` 的路径与加这个口子之前逐字节相同。若哪天生产也传了，请求就
+   * 可能被静默丢弃 —— 活动页永远等不到结果，而服务端什么都没收到，没有任何日志。
+   * `views/event/sandbox.spec.ts` 有一条断言钉住这一点。
+   *
+   * 被挂起的请求**不进超时**：它等的是人的决定，而人可能去看别的东西了。
+   */
+  shouldHold?: (op: string, args: Record<string, unknown>) => boolean
+  /** 一条请求被挂起了。调用方随后用 `forwardHeld` 或 `failHeld` 结算它。 */
+  onHold?: (held: HeldRequest) => void
+}
+
+/** 一条被挂起的请求：宿主**没有**把它发出去，等调用方决定怎么结算。 */
+export interface HeldRequest {
+  requestId: string
+  op: string
+  args: Record<string, unknown>
 }
 
 interface PendingRequest {
@@ -163,6 +206,13 @@ export function mapApiError(error: unknown): BridgeError {
 export class BridgeHost {
   private readonly options: BridgeHostOptions
   private readonly pending = new Map<string, PendingRequest>()
+  /**
+   * 被挂起、尚未结算的请求。
+   *
+   * 与 `pending` 分开是刻意的：`pending` 里的每一条都在**计时**（有超时、有
+   * AbortController），而挂起的这些只是在等人做决定，不该被计时。
+   */
+  private readonly held = new Map<string, HeldRequest>()
   private readyTimer: ReturnType<typeof setTimeout> | null = null
   private handshakeDone = false
   private eventCache: EventPublic | null = null
@@ -197,11 +247,19 @@ export class BridgeHost {
     if (this.readyTimer) clearTimeout(this.readyTimer)
     // iframe 被卸载时，未决请求必须被拒绝，否则活动页会永远挂起
     this.rejectAllPending(new BridgeError(BRIDGE_ERROR.CANCELLED, '活动页已重新加载'))
+    // 挂起的那些一并丢掉：iframe 已经换了一份文档，这些 id 不会再有人来认领
+    this.held.clear()
   }
 
   /** iframe 重新加载后重新握手（幂等） */
   onIframeLoad(): void {
     this.handshakeDone = false
+    /*
+      换了一份文档，上一份文档挂起的请求就再也没有人来认领了：转发出去的结果会带着一个
+      新文档的 SDK 不认识的 id，而"等它的人"已经不在了。留着它们只会让 `heldCount`
+      虚高、让面板列出一堆点不动的条目。与 `dispose()` 同一个理由。
+    */
+    this.held.clear()
     this.start()
   }
 
@@ -224,6 +282,9 @@ export class BridgeHost {
 
     if (!isEnvelope(event.data)) return
     const message = event.data as Envelope
+
+    // 观测口子：入站在两道校验之后，因此它看到的与真正要处理的是同一批消息
+    this.options.onMessage?.('in', message)
 
     switch (message.type) {
       case IFRAME_MESSAGE.READY:
@@ -340,6 +401,25 @@ export class BridgeHost {
       return
     }
 
+    // 挂起：**不进网络、不进超时**，等调用方决定转发还是伪造。
+    //
+    // 不设超时是刻意的：这个口子的用途是"让人看一眼再决定"，而人可能去看别的东西了。
+    // 给它套一个 30 秒的 RPC 超时，就会在调用方还没决定时先把请求判死。
+    if (this.options.shouldHold?.(op, args) === true) {
+      this.held.set(requestId, { requestId, op, args })
+      this.options.onHold?.({ requestId, op, args })
+      return
+    }
+
+    await this.runRequest(requestId, op, args)
+  }
+
+  /** 真正发出一次请求并把结果回给活动页。挂起后转发走的也是这一段。 */
+  private async runRequest(
+    requestId: string,
+    op: string,
+    args: Record<string, unknown>,
+  ): Promise<void> {
     const controller = new AbortController()
     const timeout = this.options.requestTimeoutMs ?? 30_000
 
@@ -362,6 +442,39 @@ export class BridgeHost {
       if (pending) clearTimeout(pending.timer)
       this.pending.delete(requestId)
     }
+  }
+
+  /**
+   * 转发一条被挂起的请求：照常发给后端，把**后端的真实结果**回给活动页。
+   *
+   * 找不到该 id 时什么都不做 —— 它可能已经被伪造结算过，或 iframe 已经重载。
+   */
+  async forwardHeld(requestId: string): Promise<void> {
+    const held = this.held.get(requestId)
+    if (!held) return
+    this.held.delete(requestId)
+    await this.runRequest(requestId, held.op, held.args)
+  }
+
+  /**
+   * 用一条伪造的错误结算被挂起的请求。**不发任何网络请求。**
+   *
+   * 这是"假响应"那一半：活动页拿到它、按错误分支渲染，而后端从头到尾不知道有这回事。
+   *
+   * 参数收一个普通对象而不是 `BridgeError`，是为了让调用方不必依赖这个类 —— 它本来就
+   * 只是 `{code, message, fields}` 这三个字段。
+   */
+  failHeld(
+    requestId: string,
+    error: { code: BridgeErrorCode; message: string; fields?: Record<string, string> },
+  ): void {
+    if (!this.held.delete(requestId)) return
+    this.postResult(requestId, { ok: false, error })
+  }
+
+  /** 当前被挂起、尚未结算的请求。 */
+  get heldCount(): number {
+    return this.held.size
   }
 
   private isAllowed(op: string): boolean {
@@ -568,6 +681,8 @@ export class BridgeHost {
     if (!target) return
     const envelope: Envelope = { v: PROTOCOL_VERSION, type, payload }
     if (id) envelope.id = id
+    // 观测口子：在真正发送的那一处调用，返回值被忽略（它不得影响发送）
+    this.options.onMessage?.('out', envelope)
     // targetOrigin 用 "*"：活动页处于不透明源，无法用具体源匹配。
     // 这在持有凭据的方案里是漏洞，在这里成立是因为 iframe 什么都不持有 ——
     // 泄露的只有公开活动信息与主题令牌。
