@@ -15,6 +15,24 @@ vi.mock('@/api/auth', () => ({
   logout: (...args: unknown[]) => logout(...args),
 }))
 
+/*
+  这一页现在还会渲染邀请码卡片，而那张卡片自己去取数据。不 mock 的话，未处理的
+  请求会让**这一页自己的**用例一起变红 —— 失败信息与"身份显示对不对"毫无关系。
+  卡片自己的行为由 `InvitationCard.spec.ts` 覆盖。
+*/
+vi.mock('@/api/invitations', () => ({
+  listMyInvitations: vi.fn().mockResolvedValue([]),
+  issueInvitation: vi.fn(),
+  deleteInvitation: vi.fn(),
+  listAllInvitations: vi.fn().mockResolvedValue([]),
+  createInvitation: vi.fn(),
+  revokeInvitation: vi.fn(),
+  readSwitches: vi
+    .fn()
+    .mockResolvedValue({ invitations_paused: false, invitation_issuance_paused: false }),
+  writeSwitch: vi.fn(),
+}))
+
 import ProfileView from './ProfileView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
@@ -39,6 +57,17 @@ async function mountView(account: User | null = user()) {
       { path: '/profile', name: 'profile', component: { template: '<div />' } },
       { path: '/login', name: 'login', component: { template: '<div />' } },
       { path: '/', name: 'home', component: { template: '<div />' } },
+      /*
+        邀请码卡片对管理员有一个指向管理台的入口，因此这个桩必须包含那条命名路由。
+        **本会话第五次踩这个坑了**：页面里每加一个指向新命名路由的链接，所有相关
+        桩路由都要跟着补 —— 否则 `RouterLink` 解析失败，红的是一整片与改动无关的
+        用例（这里是 6 条）。
+      */
+      {
+        path: '/admin/invitations',
+        name: 'admin-invitations',
+        component: { template: '<div />' },
+      },
     ],
   })
   await router.push('/profile')
@@ -106,6 +135,24 @@ describe('身份信息', () => {
 
     expect(wrapper.text()).not.toContain('alice')
     expect(wrapper.find('button').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('文案是写给使用者的，不掺实施计划', async () => {
+    /*
+      **这一页的文案一度出现过"不在本期范围内（见变更的 proposal）"。** 使用者不知道
+      "本期"是什么，更不会去看 proposal —— 界面文案只该说"现在有什么、你能做什么"。
+      这条断言把那类词挡在门外。
+    */
+    const { wrapper } = await mountView()
+
+    const text = wrapper.text()
+    for (const leak of ['本期', 'proposal', '变更的', '规格', '决策', '重启', '服务端']) {
+      expect(text, `界面文案里出现了「${leak}」`).not.toContain(leak)
+    }
+    // 而且该说的要说到：没有的功能如实说，并给出可走的路
+    expect(text).toContain('目前还没有')
+    expect(text).toContain('忘记密码')
     wrapper.unmount()
   })
 })

@@ -50,6 +50,16 @@ function makeRouter(): Router {
             name: 'admin-submissions',
             component: { template: '<div />' },
           },
+          /*
+            `admin-invitations` 必须在这个桩里，理由与上面 `home` 那条一样：导航项
+            指向命名路由，桩缺了它，`RouterLink` 解析不出 href，7 条用例会一起变红，
+            而失败信息（"选中态不对"）与被改的东西毫无关系。
+          */
+          {
+            path: 'invitations',
+            name: 'admin-invitations',
+            component: { template: '<div />' },
+          },
           { path: 'users', name: 'admin-users', component: { template: '<div />' } },
         ],
       },
@@ -164,6 +174,22 @@ describe('导航选中态', () => {
     expect(home, '侧栏底部没有返回主页的链接').toBeTruthy()
     expect(home!.attributes('href')).toBe('/')
     wrapper.unmount()
+  })
+
+  it('邀请入口与用户入口同档：仅管理员可见', async () => {
+    /*
+      两者管的都是账号与准入门槛，越权访问的影响面比活动与提交更大 —— 因此不是
+      "登录就能看到"，而是与用户管理一样只对管理员显示。
+    */
+    const asAdmin = await mountShell('/admin/events', 'admin')
+    expect(asAdmin.wrapper.text()).toContain('邀请')
+    asAdmin.wrapper.unmount()
+
+    const asUser = await mountShell('/admin/events', 'user')
+    expect(asUser.wrapper.text()).not.toContain('邀请')
+    // 活动与提交对普通用户仍然可见 —— 隐藏的是"管理账号与准入"那一档
+    expect(asUser.wrapper.text()).toContain('活动')
+    asUser.wrapper.unmount()
   })
 
   it('非管理员看不到用户入口', async () => {

@@ -21,8 +21,14 @@ const router = useRouter()
 const username = ref('')
 const password = ref('')
 const email = ref('')
+/**
+ * 邀请码。**必填** —— 自助注册不是无条件开放的。
+ *
+ * 失败时服务端只回一句"邀请码不可用"，不区分码不存在、过期、用尽还是平台暂停了邀请：
+ * 注册接口匿名可达，区分原因等于把它变成邀请码枚举器（见 docs/auth-contract.md）。
+ */
+const invitationCode = ref('')
 const error = ref('')
-const fieldErrors = ref<Record<string, string>>({})
 const busy = ref(false)
 
 /** 是否处于"已发送，去查收邮件"的状态。由 query 决定，见文件头 */
@@ -39,18 +45,19 @@ const canSubmit = computed(
   () =>
     username.value.trim().length > 0 &&
     password.value.length > 0 &&
-    email.value.trim().length > 0,
+    email.value.trim().length > 0 &&
+    invitationCode.value.trim().length > 0,
 )
 
 async function onSubmit(): Promise<void> {
   error.value = ''
-  fieldErrors.value = {}
   busy.value = true
   try {
     const result = await auth.signUp({
       username: username.value.trim(),
       password: password.value,
       email: email.value.trim(),
+      invitation_code: invitationCode.value.trim(),
     })
     await router.replace({
       query: { sent: '1', ...(result.ongoing ? { ongoing: '1' } : {}) },
@@ -58,11 +65,21 @@ async function onSubmit(): Promise<void> {
     username.value = ''
     password.value = ''
     email.value = ''
+    invitationCode.value = ''
   } catch (caught) {
     if (caught instanceof ApiError) {
-      error.value = caught.message
-      // 字段级错误直接标到对应输入框上 —— 冲突提示也走这条路
-      fieldErrors.value = caught.fields ?? {}
+      /*
+        **只显示一条错误。**
+
+        原先这里是两处一起显示：红色卡片写 `caught.message`（"提交内容有误"），
+        字段下面写 `caught.fields` 里的具体原因（"邀请码不可用"）—— 于是邀请码不通过
+        时屏幕上同时出现两句，而且**更笼统的那句在上面**，读者先看到的是没用的那句。
+
+        现在统一到红色卡片里，并**优先用字段里的具体原因**：它才是能让人据以行动的
+        那一句。字段提示不再单独渲染，避免同一件事说两遍。
+      */
+      const specific = Object.values(caught.fields ?? {})[0]
+      error.value = specific ?? caught.message
     } else {
       error.value = '注册失败，请稍后重试'
     }
@@ -112,21 +129,30 @@ async function backToForm(): Promise<void> {
       <label class="field">
         <span class="field__label">用户名</span>
         <input v-model="username" autocomplete="username" required />
-        <span v-if="fieldErrors.username" class="field__error">{{ fieldErrors.username }}</span>
       </label>
 
       <label class="field">
         <span class="field__label">密码</span>
         <input v-model="password" type="password" autocomplete="new-password" required />
         <span class="field__hint dim">至少 8 个字符。长度比复杂度更有效。</span>
-        <span v-if="fieldErrors.password" class="field__error">{{ fieldErrors.password }}</span>
       </label>
 
       <label class="field">
         <span class="field__label">邮箱</span>
         <input v-model="email" type="email" autocomplete="email" required />
         <span class="field__hint dim">验证链接会发到这里。</span>
-        <span v-if="fieldErrors.email" class="field__error">{{ fieldErrors.email }}</span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">邀请码</span>
+        <input
+          v-model="invitationCode"
+          class="mono"
+          autocomplete="off"
+          maxlength="64"
+          required
+        />
+        <span class="field__hint dim">向社团成员索取，或由管理员发放。</span>
       </label>
 
       <p v-if="error" class="alert" role="alert">{{ error }}</p>

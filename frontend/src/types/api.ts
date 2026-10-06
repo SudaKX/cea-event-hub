@@ -138,3 +138,39 @@ export interface ResetToken {
   token: string
   expires_at: string
 }
+
+/** 一次邀请码使用：谁、在何时。 */
+export interface InvitationUsage {
+  /** 为空表示使用者账号已被删除 —— 记录还在，只是不知道是谁了 */
+  username: string | null
+  used_at: string
+}
+
+/**
+ * 一张邀请码。
+ *
+ * 用户端与管理端看到的是**同一个形状** —— 两张界面要显示的东西本来就一样
+ * （token、名称、有效期、次数、使用情况），区别只在范围。
+ */
+export interface InvitationCode {
+  id: number
+  token: string
+  name: string
+  max_uses: number
+  used_count: number
+  expires_at: string
+  /** 管理员让它失效的时刻。**不是删除** —— 已产生记录的码靠它停用 */
+  revoked_at: string | null
+  created_at: string
+  /** 平台码：管理员创建，不归属个人 */
+  is_platform: boolean
+  usages: InvitationUsage[]
+}
+
+/** 两个应急开关的当前状态。 */
+export interface PlatformSwitches {
+  /** 暂停邀请：拒绝**一切**邀请码校验，含此前发出的 */
+  invitations_paused: boolean
+  /** 暂停申请：只挡新申请，已发出的码照常可用 */
+  invitation_issuance_paused: boolean
+}

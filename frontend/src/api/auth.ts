@@ -14,6 +14,13 @@ export interface RegisterPayload {
   display_name?: string
   /** **必填**：注册要经邮箱验证才算完成，而验证的对象就是它 */
   email: string
+  /**
+   * **必填**：自助注册需要持有效邀请码。
+   *
+   * 服务端对"码不存在 / 已过期 / 已用尽 / 平台暂停"给出**同一句**提示，因此界面
+   * 只能把它显示成"这个邀请码不可用"，不要试图分辨原因 —— 那正是它刻意不说的。
+   */
+  invitation_code: string
 }
 
 export interface RegistrationStarted {

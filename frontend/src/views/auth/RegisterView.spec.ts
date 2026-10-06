@@ -86,6 +86,9 @@ describe('注册表单', () => {
 
     await inputFor(wrapper, '用户名').setValue('alice')
     await inputFor(wrapper, '密码').setValue('correct-horse')
+    // 邀请码现在是必填的，一并填上 —— 否则这条用例会因为"另一个字段没填"而失败，
+    // 而它要验的是邮箱
+    await inputFor(wrapper, '邀请码').setValue('ABCDEFGHJK')
     expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
 
     await inputFor(wrapper, '邮箱').setValue('alice@example.com')
@@ -93,10 +96,66 @@ describe('注册表单', () => {
     wrapper.unmount()
   })
 
-  it('不再有邀请码字段', async () => {
-    // 该机制已随任务 4.8 移除；留着输入框会让用户以为它还有用
+  it('有邀请码字段，且它是必填的', async () => {
+    /*
+      **这条断言的方向被本变更反转过。** 它原先写的是"不再有邀请码字段"，依据是
+      任务 4.8 移除了那个共享口令开关。现在准入换成了一套真正的邀请码机制，字段
+      回来了 —— 留着旧断言会让"注册页有邀请码字段"这件事永远测不过。
+    */
     const { wrapper } = await mountRegister()
-    expect(wrapper.text()).not.toContain('邀请码')
+
+    expect(wrapper.text()).toContain('邀请码')
+    const field = inputFor(wrapper, '邀请码')
+    expect(field.exists()).toBe(true)
+
+    // 其余三项都填了、只有邀请码空着时，仍然不能提交
+    await inputFor(wrapper, '用户名').setValue('alice')
+    await inputFor(wrapper, '密码').setValue('correct-horse')
+    await inputFor(wrapper, '邮箱').setValue('alice@example.com')
+    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
+
+    await field.setValue('ABCDEFGHJK')
+    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('提交时把邀请码带上', async () => {
+    register.mockResolvedValue({ ongoing: false })
+    const { wrapper } = await mountRegister()
+
+    await inputFor(wrapper, '用户名').setValue('alice')
+    await inputFor(wrapper, '密码').setValue('correct-horse')
+    await inputFor(wrapper, '邮箱').setValue('alice@example.com')
+    await inputFor(wrapper, '邀请码').setValue('ABCDEFGHJK')
+    await wrapper.find('form').trigger('submit')
+
+    await vi.waitFor(() =>
+      expect(register).toHaveBeenCalledWith(
+        expect.objectContaining({ invitation_code: 'ABCDEFGHJK' }),
+      ),
+    )
+    wrapper.unmount()
+  })
+
+  it('邀请码不可用时把提示落在该字段上', async () => {
+    /*
+      服务端只回一句"邀请码不可用"，不区分原因 —— 注册接口匿名可达，区分原因等于
+      把它变成邀请码枚举器。界面因此只能照原样显示。
+    */
+    register.mockRejectedValue(
+      new ApiError('validation_failed', '提交内容有误', 422, {
+        invitation_code: '邀请码不可用',
+      }),
+    )
+    const { wrapper } = await mountRegister()
+
+    await inputFor(wrapper, '用户名').setValue('alice')
+    await inputFor(wrapper, '密码').setValue('correct-horse')
+    await inputFor(wrapper, '邮箱').setValue('alice@example.com')
+    await inputFor(wrapper, '邀请码').setValue('WRONGCODE1')
+    await wrapper.find('form').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('邀请码不可用'))
     wrapper.unmount()
   })
 
@@ -151,7 +210,14 @@ describe('注册表单', () => {
     wrapper.unmount()
   })
 
-  it('"有待验证的注册"这类冲突落在对应字段上', async () => {
+  it('冲突提示显示在红色错误卡片里，且用更具体的那一句', async () => {
+    /*
+      **这条断言的方向被改过。** 它原先查的是字段下面那行小字（`.field__error`），
+      但同一件事因此被说了两遍：卡片写笼统的 `message`（"提交内容有误"），字段下面
+      写具体原因。屏幕上先看到的反而是没用那句。
+
+      现在只有一处：红色卡片，且**优先用字段里的具体原因** —— 它才能让人据以行动。
+    */
     register.mockRejectedValue(
       new ApiError('registration_pending', '该用户名或邮箱有一条待验证的注册', 409, {
         username: '该用户名有一条待验证的注册',
@@ -162,12 +228,38 @@ describe('注册表单', () => {
     await inputFor(wrapper, '用户名').setValue('alice')
     await inputFor(wrapper, '密码').setValue('correct-horse')
     await inputFor(wrapper, '邮箱').setValue('alice@example.com')
+    await inputFor(wrapper, '邀请码').setValue('ABCDEFGHJK')
     await wrapper.find('form').trigger('submit')
-    await vi.waitFor(() => expect(wrapper.find('.field__error').exists()).toBe(true))
+
+    await vi.waitFor(() => expect(wrapper.find('[role="alert"]').exists()).toBe(true))
+    expect(wrapper.find('[role="alert"]').text()).toContain('待验证')
+    // 字段下面不再重复一遍
+    expect(wrapper.find('.field__error').exists()).toBe(false)
 
     // 没跳到"已发送"，因为这次并没有建立占位
     expect(router.currentRoute.value.query.sent).toBeUndefined()
-    expect(wrapper.find('.field__error').text()).toContain('待验证')
+    wrapper.unmount()
+  })
+
+  it('只显示一条错误，且不是那句笼统的', async () => {
+    /* 邀请码不通过时的原始症状：卡片一句 + 字段一句，共两处。 */
+    register.mockRejectedValue(
+      new ApiError('validation_failed', '提交内容有误', 422, {
+        invitation_code: '邀请码不可用',
+      }),
+    )
+    const { wrapper } = await mountRegister()
+
+    await inputFor(wrapper, '用户名').setValue('alice')
+    await inputFor(wrapper, '密码').setValue('correct-horse')
+    await inputFor(wrapper, '邮箱').setValue('alice@example.com')
+    await inputFor(wrapper, '邀请码').setValue('WRONGCODE1')
+    await wrapper.find('form').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.find('[role="alert"]').exists()).toBe(true))
+    expect(wrapper.findAll('[role="alert"]')).toHaveLength(1)
+    expect(wrapper.find('[role="alert"]').text()).toBe('邀请码不可用')
+    expect(wrapper.text()).not.toContain('提交内容有误')
     wrapper.unmount()
   })
 })

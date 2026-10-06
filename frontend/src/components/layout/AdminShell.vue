@@ -22,6 +22,9 @@ const navItems = computed(() => {
     { name: 'admin-submissions', label: '提交', hint: '审核与清理提交' },
   ]
   if (auth.isAdmin) {
+    // 邀请与用户都管的是账号与准入门槛，越权访问的影响面比活动与提交更大，
+    // 因此与用户管理同档：**仅管理员可见**
+    items.push({ name: 'admin-invitations', label: '邀请', hint: '准入与平台开关' })
     items.push({ name: 'admin-users', label: '用户', hint: '角色与状态管理' })
   }
   return items
@@ -89,7 +92,12 @@ async function onSignOut(): Promise<void> {
         <RouterLink class="btn btn--ghost btn--small" :to="{ name: 'home' }">
           返回主页
         </RouterLink>
-        <button class="btn btn--ghost btn--small" type="button" @click="onSignOut">
+        <!--
+          退出用**强调色**：它与上面那个"返回主页"不是一类动作 —— 一个是导航，一个是
+          结束会话。两个都做成 ghost 时它们看起来同样轻，而退出是会把人踢出登录态的
+          那一个，值得显眼。
+        -->
+        <button class="btn btn--danger btn--small" type="button" @click="onSignOut">
           退出登录
         </button>
       </div>
