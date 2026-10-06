@@ -23,6 +23,14 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  /*
+    压在源码上的转换选项。
+
+    这里**不放 `esbuild: { legalComments: 'none' }`**：Vite 8 的转换与压缩都走 Oxc，
+    那个选项属于 esbuild，写了也不会生效（而且 `minify: 'esbuild'` 在 Vite 8 里会直接
+    报错 —— esbuild 不再是内置依赖，要单独安装）。注释是否被清掉由下面的构建结果实测确认，
+    不靠一个看起来对、实际被忽略的开关。
+  */
   build: {
     outDir: 'public/sdk/v1',
     emptyOutDir: true,
@@ -31,8 +39,18 @@ export default defineConfig({
     // 无限递归下去。实测能刷出几千个嵌套目录（public/sdk/v1/sdk/v1/sdk/...）
     // 并且永远跑不完，表现为 `npm run build:sdk` 静默挂死。
     copyPublicDir: false,
-    // 不压缩：活动作者可能会打开它看协议，可读性比几 KB 更值
-    minify: false,
+    /*
+      压缩，并去掉全部注释。
+
+      这里原本是**刻意不压缩**的，理由写着"活动作者可能会打开它看协议，可读性比几 KB
+      更值"。那个理由经不起推敲：协议本身写在 `docs/bridge-protocol.md` 里，那才是给人
+      读的地方；把可读性寄托在**产物**上，等于让每次加载活动页的下载都为文档付账，而这份
+      脚本是每个活动页都要取的。
+
+      用默认压缩器（Vite 8 是 Oxc）。注释由压缩一步清掉 —— 这一点靠实测确认（构建后
+      检索产物里还有没有 `/*` 与 `@license`），不靠配置里写着什么。
+    */
+    minify: true,
     // 刻意**不用 build.lib**。`lib.name` 会让 Rollup 为 IIFE 生成
     // `var CEA = <exports>`，在全局作用域把这个名字覆盖掉 —— 模块内部的
     // `window.CEA = api` 会被冲掉，活动页拿到一个空对象，症状是
