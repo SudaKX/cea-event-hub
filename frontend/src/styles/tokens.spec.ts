@@ -117,6 +117,42 @@ describe('设计令牌', () => {
     expect(slant(track)).toBeCloseTo(slant(thumb), 0)
   })
 
+  it('下发给活动页的令牌，与指南里列的一致', () => {
+    /*
+      **这是一份对外契约。** 指南的「设计令牌」一节告诉活动页作者"宿主会给你哪些"，
+      而真正给出去的是 `EventView.vue` 里那张清单 —— 两处各写一遍，迟早一处加了、
+      另一处没加。刚发生过：宿主下发 12 个，指南列了 8 个。
+
+      活动页**不必**跟随宿主的视觉语言（那是活动自己的事），但"提供了什么"必须说准。
+    */
+    const view = readFileSync(resolve(srcDir, 'views/event/EventView.vue'), 'utf-8')
+    const pushed = new Set(
+      (/const names = \[([\s\S]*?)\]/.exec(view)?.[1] ?? '')
+        .split(',')
+        .map((s) => s.trim().replace(/^'|'$/g, ''))
+        .filter(Boolean),
+    )
+    expect(pushed.size).toBeGreaterThan(5)
+
+    const guide = readFileSync(
+      resolve(process.cwd(), '../docs/event-page-guide.md'),
+      'utf-8',
+    )
+    const section = /## 设计令牌[\s\S]*?(?=\n## )/.exec(guide)?.[0] ?? ''
+    const documented = new Set(
+      [...section.matchAll(/\|\s*`(--[a-z-]+)`\s*\|/g)].map((m) => m[1]!),
+    )
+
+    // 指南提到的每个令牌都真的会下发
+    const missing = [...documented].filter((name) => !pushed.has(name))
+    expect(missing, `指南列了但不下发：${missing}`).toEqual([])
+
+    // 颜色令牌反过来也要齐：少给一个，想对齐的活动页就只能写死
+    const colours = [...pushed].filter((name) => name !== '--mono' && name !== '--sans')
+    const undocumented = colours.filter((name) => !documented.has(name))
+    expect(undocumented, `下发了但指南没列：${undocumented}`).toEqual([])
+  })
+
   it('圆角一律为零', () => {
     /*
       **这一版走锐利路线**：容器、卡片、控件、标签全是直角。两个令牌保留下来

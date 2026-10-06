@@ -128,18 +128,28 @@ function identity(): IdentityDescriptor {
   }
 }
 
-/** 把设计令牌下发给活动页，使活动内容与宿主观感一致。 */
+/**
+ * 把设计令牌下发给活动页。
+ *
+ * **这是"提供"而不是"要求"**：活动页的视觉语言由活动自己决定，宿主只把颜色与字体
+ * 摆出来，用不用、用多少都随它。因此这里下发的是**完整的颜色集合**（含描边与阴影
+ * 实色），而不是宿主当前恰好用到的那几个 —— 少给一个，想对齐的活动页就只能写死。
+ *
+ * 取值全部从宿主自己的计算样式里读，不在这里另抄一份：抄一份就多一处会漂移的真相。
+ */
 function theme(): Record<string, string> {
   const styles = getComputedStyle(document.documentElement)
   const names = [
     '--bg',
     '--panel',
     '--bone',
+    '--edge',
     '--mute',
     '--dim',
     '--red',
     '--red-hi',
     '--line',
+    '--shadow-ink',
     '--mono',
     '--sans',
     '--radius-control',
