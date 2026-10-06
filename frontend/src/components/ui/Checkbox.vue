@@ -121,7 +121,8 @@ function onChange(event: Event): void {
   place-items: center;
   background: var(--bg);
   border: 1px solid var(--line-strong);
-  border-radius: 4px;
+  /* 直角，与全站一致（这里原先写死 4px） */
+  border-radius: 0;
   transition:
     background var(--transition-fast),
     border-color var(--transition-fast);

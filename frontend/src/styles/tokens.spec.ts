@@ -48,11 +48,15 @@ const REQUIRED_TOKENS: Record<string, string> = {
   '--bg': '#0b0b0d',
   '--panel': '#101014',
   '--bone': '#cfcac4',
+  // 卡片描边。比主文字暗一档 —— 全亮时边缘比内容还抢眼
+  '--edge': '#b0aba5',
   '--mute': '#8b8e97',
   '--dim': '#5f626b',
   '--red': '#d0202f',
   '--red-hi': '#ff4a55',
   '--line': 'rgba(255, 255, 255, 0.09)',
+  // 硬阴影的实色。刻意压得很暗：亮色去做描边了，两者都用亮色卡片会像在发光
+  '--shadow-ink': '#26262e',
 }
 
 describe('设计令牌', () => {
@@ -74,9 +78,80 @@ describe('设计令牌', () => {
     expect(sans).toContain('Microsoft YaHei')
   })
 
-  it('圆角只有两档', () => {
-    expect(tokensCss).toMatch(/--radius-control\s*:\s*7px/)
-    expect(tokensCss).toMatch(/--radius-surface\s*:\s*10px/)
+  it('开关的六边形几何是对的', () => {
+    /*
+      **`polygon(25% 0, 75% 0, …)` 只在盒子宽高比 = 2:√3 时才是正六边形。**
+      滑块原先写成 14×14（正方形），于是它是个"压扁的"六边形；外轨是宽扁的 44×24，
+      照抄 25% 会让斜边平到 42.5°，两个六边形看起来不是同一种形状。
+
+      判据有两条，都能算：① 滑块宽高比 = 2:√3；② 两者的**斜边角度相同**（正六边形
+      是 30°）。顶点内缩 `a` 由角度决定：`a = (h/2)·tan30° = h/(2√3)`。
+    */
+    const source = readFileSync(
+      resolve(srcDir, 'components/ui/Switch.vue'),
+      'utf-8',
+    )
+
+    const size = (selector: string) => {
+      const block = ruleOf(source, new RegExp(`\\${selector}\\s*\\{[^}]*\\}`))
+      const width = Number(/width:\s*([\d.]+)px/.exec(block)?.[1])
+      const height = Number(/height:\s*([\d.]+)px/.exec(block)?.[1])
+      const inset = Number(/polygon\(([\d.]+)%/.exec(block)?.[1])
+      return { width, height, inset }
+    }
+
+    /** 斜边与竖直方向的夹角 */
+    const slant = ({ width, height, inset }: ReturnType<typeof size>) =>
+      (Math.atan2((width * inset) / 100, height / 2) * 180) / Math.PI
+
+    const track = size('.switch__track')
+    const thumb = size('.switch__thumb')
+    expect(track.width).toBeGreaterThan(0)
+    expect(thumb.width).toBeGreaterThan(0)
+
+    // ① 滑块是正六边形
+    expect(thumb.width / thumb.height).toBeCloseTo(2 / Math.sqrt(3), 2)
+
+    // ② 两者斜边同角度，且都在 30° 附近
+    expect(slant(thumb)).toBeCloseTo(30, 0)
+    expect(slant(track)).toBeCloseTo(slant(thumb), 0)
+  })
+
+  it('圆角一律为零', () => {
+    /*
+      **这一版走锐利路线**：容器、卡片、控件、标签全是直角。两个令牌保留下来
+      （而不是把 26 处用法删掉），是因为"直角"本身是个可回退的决定。
+    */
+    expect(tokensCss).toMatch(/--radius-control\s*:\s*0\s*;/)
+    expect(tokensCss).toMatch(/--radius-surface\s*:\s*0\s*;/)
+  })
+
+  it('没有写死的圆角（圆形与六边形除外）', () => {
+    /*
+      漏一处就会有一个控件保持圆角，而它**不会报错**，只会在界面上显得格格不入。
+      允许的例外只有一种写法：`0` 与走令牌 —— 圆形用 `border-radius: 50%`，那是
+      **状态圆点与头像位**（不是容器）；开关的六边形走 `clip-path`，不经过这条属性。
+    */
+    const offenders: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = resolve(dir, entry.name)
+        if (entry.isDirectory()) {
+          walk(full)
+          continue
+        }
+        if (!/\.(vue|css)$/.test(entry.name) || /\.spec\.ts$/.test(entry.name)) continue
+        // 先剥注释：说明文字里会提到"4px 圆角"这类字眼
+        const text = readFileSync(full, 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '')
+        for (const match of text.matchAll(/border-radius:\s*([^;]+);/g)) {
+          const value = match[1]!.trim()
+          if (value === '0' || value.includes('var(--radius') || value === '50%') continue
+          offenders.push(`${entry.name}: ${value}`)
+        }
+      }
+    }
+    walk(srcDir)
+    expect(offenders).toEqual([])
   })
 })
 
@@ -167,9 +242,10 @@ describe('控件高度统一', () => {
   })
 
   it('输入框与下拉都取这个令牌', () => {
+    // 不钉死选择器链，理由见 surfaceRule 上面那段
     const inputRule = ruleOf(
       componentsCss,
-      /\.field input:not\(\[type='checkbox'\]\):not\(\[type='radio'\]\),[\s\S]*?\}/,
+      /\.field input:not\(\[type='checkbox'\]\)[^{]*\{[\s\S]*?\}/,
     )
     expect(inputRule).toContain('var(--control-height)')
 
@@ -209,9 +285,17 @@ describe('表单控件不留系统默认外观', () => {
     掉过一次 —— 给复选框加 `:not()` 排除时顺手把它从规则里带走了，活动简介框
     当场变成白底。
   */
+  /*
+    提取表面样式规则。
+
+    正则**不要钉死选择器链**：`NumberInput` 的中间段要排除在这条全局规则之外，于是
+    末尾多了一个 `:not(.stepper__input)` —— 钉死的写法会因此提取到空串，三条断言一起
+    变红，而它们要守的约定（三种文本控件共用一条表面样式）其实完好。匹配到 `{` 为止
+    即可，选择器里多几个 `:not()` 不影响。
+  */
   const surfaceRule = ruleOf(
     componentsCss,
-    /\.field input:not\(\[type='checkbox'\]\):not\(\[type='radio'\]\),[\s\S]*?\}/,
+    /\.field input:not\(\[type='checkbox'\]\)[^{]*\{[\s\S]*?\}/,
   )
 
   it('文本输入、下拉、多行文本共用同一条表面样式', () => {

@@ -24,6 +24,40 @@
   gap: 14px;
 }
 
+/* 带关闭按钮的卡片：给那个绝对定位的按钮一个参照 */
+.auth__card--closable {
+  position: relative;
+}
+
+/*
+  卡片右上角的关闭：回首页。
+
+  被守卫引到登录页的人（例如点进管理台）需要一个明确的"算了" —— 否则只能靠浏览器
+  后退，而那是浏览器的事，不是这一页的出口。用文字 × 而不是图标字体：一个字符就够，
+  不必为此引入一套图标。
+*/
+.auth__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-control);
+  color: var(--mute);
+  font: 400 20px/1 var(--sans);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.auth__close:hover {
+  background: var(--select-soft);
+  color: var(--bone);
+  text-decoration: none;
+}
+
 .auth__title {
   font-size: 22px;
 }
@@ -99,8 +133,13 @@
 
   textarea 必须留在这条规则里。排除复选框时顺手把它漏掉过一次 —— 它于是丢了背景、
   边框与内边距，回落到浏览器默认的白底，在暗色界面上格外刺眼。
+
+  **`.stepper__input` 也排除在外**：那是 `NumberInput` 中间那一段，它自己已经在一个
+  带边框的组合控件里，再套一层框、10px 圆角与红色聚焦边框就是重复（10px 圆角嵌在
+  7px 的外框里，视觉上也是错的）。这条全局规则的特异度是 (0,3,1)，组件里的 scoped
+  样式（0,2,0）**压不过它** —— 所以在源头排除，而不是在组件里堆特异度。
 */
-.field input:not([type='checkbox']):not([type='radio']),
+.field input:not([type='checkbox']):not([type='radio']):not(.stepper__input),
 .field select,
 .field textarea,
 .input {
@@ -122,7 +161,7 @@
   font-family: var(--sans);
 }
 
-.field input:not([type='checkbox']):not([type='radio']):focus,
+.field input:not([type='checkbox']):not([type='radio']):not(.stepper__input):focus,
 .field select:focus,
 .field textarea:focus,
 .input:focus {

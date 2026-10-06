@@ -5,9 +5,10 @@ import { RouterLink, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 import { deleteEvent, deployContent, getAdminEvent, listContent, updateEvent } from '@/api/events'
-import Checkbox from '@/components/ui/Checkbox.vue'
 import FileInput from '@/components/ui/FileInput.vue'
 import Select, { type SelectOption } from '@/components/ui/Select.vue'
+import NumberInput from '@/components/ui/NumberInput.vue'
+import Switch from '@/components/ui/Switch.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { EVENT_VISIBILITY, EVENT_VISIBILITY_OPTIONS, parseVisibility } from '@/domain/event'
@@ -44,8 +45,23 @@ const form = ref({
   status: 'draft',
   visibility: String(EVENT_VISIBILITY.PUBLIC),
   submission_requires_login: false,
-  max_submissions: '' as string,
-  max_per_submitter: '' as string,
+  /** null = 留空：条数上限取服务端默认，每人最多表示不限 */
+  max_submissions: null as number | null,
+  max_per_submitter: null as number | null,
+})
+
+/**
+ * "允许匿名提交"开关的读写口。
+ *
+ * 界面上写的是**允许匿名**，而字段存的是**需要登录** —— 一对反向。反转只在这两个
+ * 函数里发生：模板里直接 `v-model`，看不见 `!`。散到模板上的话，迟早有一处漏掉，
+ * 而"匿名开关反了"这种错误从界面上很难看出来（开关动了、保存也成功，语义却相反）。
+ */
+const allowAnonymous = computed({
+  get: () => !form.value.submission_requires_login,
+  set: (allowed: boolean) => {
+    form.value.submission_requires_login = !allowed
+  },
 })
 
 const quotaText = computed(() => {
@@ -74,9 +90,9 @@ async function loadDetail(): Promise<void> {
     status: detail.status,
     visibility: String(detail.visibility),
     submission_requires_login: detail.submission_requires_login,
-    max_submissions: detail.max_submissions === null ? '' : String(detail.max_submissions),
-    max_per_submitter:
-      detail.max_per_submitter === null ? '' : String(detail.max_per_submitter),
+    // 接口给的就是 null（留空），直接用 —— 不必再过一手空串
+    max_submissions: detail.max_submissions ?? null,
+    max_per_submitter: detail.max_per_submitter ?? null,
   }
 }
 
@@ -101,12 +117,9 @@ async function onSave(): Promise<void> {
       status: form.value.status,
       visibility: parseVisibility(form.value.visibility),
       submission_requires_login: form.value.submission_requires_login,
-      max_submissions: form.value.max_submissions === '' ? null : Number(form.value.max_submissions),
-      // 留空 = 不限制。**不能写 Number('')** —— 那是 0，而下限是 1，会被后端拒绝
-      max_per_submitter:
-        form.value.max_per_submitter === ''
-          ? null
-          : Number(form.value.max_per_submitter),
+      // null = 留空。**不能写 Number('')** —— 那是 0，而下限是 1，会被后端拒绝
+      max_submissions: form.value.max_submissions,
+      max_per_submitter: form.value.max_per_submitter,
     })
     toast.ok('已保存')
   } catch (caught) {
@@ -205,33 +218,45 @@ watch(() => props.eventId, load)
               :options="EVENT_VISIBILITY_OPTIONS"
             />
 
-            <label class="field">
-              <span class="field__label">条数上限<span class="dim">（留空取默认）</span></span>
-              <input v-model="form.max_submissions" type="number" min="0" />
+            <!-- 用 `<div>` + 显式 for，不要用 `<label>` 包住 NumberInput（见组件的说明） -->
+            <div class="field">
+              <label class="field__label" for="detail-max-submissions">
+                条数上限<span class="dim">（留空取默认）</span>
+              </label>
+              <NumberInput
+                id="detail-max-submissions"
+                v-model="form.max_submissions"
+                label="条数上限"
+                nullable
+                :min="0"
+                :null-base="4096"
+              />
               <span class="field__hint dim">当前：{{ quotaText }}</span>
-            </label>
+            </div>
 
-            <label class="field">
-              <span class="field__label">
+            <div class="field">
+              <label class="field__label" for="detail-max-per-submitter">
                 每人最多<span class="dim">（留空不限）</span>
-              </span>
-              <input v-model="form.max_per_submitter" type="number" min="1" />
-            </label>
+              </label>
+              <NumberInput
+                id="detail-max-per-submitter"
+                v-model="form.max_per_submitter"
+                label="每人最多"
+                nullable
+                :min="1"
+              />
+            </div>
 
             <!--
-              复选框自成一行控件：裸的 <input type="checkbox"> 会被 .field input 的
-              width:100% 撑满整行，把标签文字挤到只剩几像素、疯狂折行。
+              **开关读的是"允许匿名"，字段存的是"需要登录" —— 一对反向。**
+              反转只写在一个 computed 里，不散到模板上；否则模板里到处是 `!`，
+              改起来必然有一处漏掉，而这类错误的后果是"匿名开关反了"，很难从界面上看出来。
             -->
             <div class="field">
               <span class="field__label">是否允许匿名提交</span>
               <div class="toggle-row">
-                <Checkbox v-model="form.submission_requires_login" label="提交需要登录" />
-                <span
-                  class="toggle-row__text"
-                  @click="form.submission_requires_login = !form.submission_requires_login"
-                >
-                  提交需要登录
-                </span>
+                <Switch v-model="allowAnonymous" label="允许匿名提交" />
+                <span class="toggle-row__text">允许匿名提交</span>
               </div>
             </div>
           </div>
@@ -251,7 +276,7 @@ watch(() => props.eventId, load)
           -->
           <p class="card__note dim">
             「每人最多」对<strong>匿名</strong>活动只能防误操作：匿名提交者的身份由
-            客户端自报，换一个浏览器即可绕过。要真正限制，请勾选"提交需要登录"
+            客户端自报，换一个浏览器即可绕过。要真正限制，请关掉上面的"允许匿名提交"
             —— 那时提交者是可核实的登录用户。
           </p>
 

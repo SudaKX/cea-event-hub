@@ -40,6 +40,12 @@ async function mountView(query = '') {
       { path: '/admin/events', name: 'admin-events', component: { template: '<div />' } },
       // 与真实路由表同形：活动是带参数的动态段
       { path: '/:eventId', name: 'event', component: { template: '<div />' } },
+      /*
+        `home` 必须在：卡片右上角那个关闭按钮指向它。**这是本会话第六次踩同一个坑**
+        —— 页面里每加一个指向新命名路由的链接，所有相关桩路由都要跟着补，否则
+        `RouterLink` 解析失败，红的是一整片与改动无关的用例（这里是全部 4 条）。
+      */
+      { path: '/', name: 'home', component: { template: '<div />' } },
     ],
   })
   await router.push(`/login${query}`)

@@ -1,7 +1,7 @@
 /**
  * 基础样式：重置、排版、焦点、以及少量原子类。
  *
- * 刻意不使用渐变、不使用超过两档的圆角、不使用超过 200ms 的过渡 ——
+ * 刻意不使用渐变、**不使用圆角**、不使用超过 200ms 的过渡 ——
  * 这三条是设计语言的硬约束（见 web-app-shell 规格）。
  */
 
@@ -117,10 +117,79 @@ pre {
   color: var(--dim);
 }
 
+/*
+  **面板只提供表面，不含内边距。** 内边距由各页面自己给 —— 因为同一块表面既用于
+  宽卡片，也用于贴着表格的容器，还有需要零内边距以便表格铺满的情形。
+
+  代价是"忘了给"会表现为"内容贴着边框"，看起来像样式失效。刚发生过一次
+  （邀请码管理页），所以在这里写明。
+
+  **硬阴影是这一版的视觉主张**：一块不透明、不模糊的实色，向右下偏 4px。卡片因此
+  像压在纸面上的实体，而不是浮起来的软板 —— 与"一律直角"是同一条路线上的两件事。
+
+  **描边用亮色、阴影用暗色**：亮描边负责"边界在哪"（在近黑的底上勾出清晰的轮廓），
+  暗色块负责"有多厚"。两者都用亮色时卡片会像在发光。
+*/
 .panel {
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-surface);
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow-block);
+}
+
+/*
+  卡片内部：标题、说明、以及"左标签右值"的行。
+
+  卡片现在是**页面级**的排版单元（个人中心是一组流式卡片），因此这个惯用法跟着
+  `.panel` 放在这里，而不是每个视图各写一遍 —— 两处各写一份，迟早长成两个样子
+  （本仓库已经在这类重复上栽过）。
+
+  标题用等宽小字号 + 字距，与既有的区块标签（`.home__label`、`.invites__label`）
+  同一档：它们说的是"这块是什么"，不该抢注意力。
+*/
+.panel__title {
+  margin: 0;
+  font: 600 12px/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--mute);
+}
+
+.panel__lead {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--dim);
+}
+
+.panel__lead strong {
+  color: var(--bone);
+}
+
+.panel__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.panel__row:first-child {
+  border-top: 0;
+}
+
+.panel__row-label {
+  flex: none;
+  color: var(--mute);
+  font-size: 12px;
 }
 
 .row {

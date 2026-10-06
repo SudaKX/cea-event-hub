@@ -5,8 +5,9 @@ import { RouterLink } from 'vue-router'
 
 import { ApiError } from '@/api/client'
 import { createEvent, listAdminEvents } from '@/api/events'
-import Checkbox from '@/components/ui/Checkbox.vue'
 import Select from '@/components/ui/Select.vue'
+import NumberInput from '@/components/ui/NumberInput.vue'
+import Switch from '@/components/ui/Switch.vue'
 import { useToast } from '@/composables/useToast'
 import {
   EVENT_VISIBILITY,
@@ -32,9 +33,10 @@ const draft = ref({
   title: '',
   summary: '',
   submission_requires_login: false,
-  max_submissions: '' as string,
-  /** 单个提交者最多几份；留空 = 不限 */
-  max_per_submitter: '' as string,
+  /** 条数上限；null = 留空，不传该字段即走服务端默认 */
+  max_submissions: null as number | null,
+  /** 单个提交者最多几份；null = 不限 */
+  max_per_submitter: null as number | null,
   // 默认公开：与加这个字段之前的行为一致
   visibility: String(EVENT_VISIBILITY.PUBLIC),
 })
@@ -61,13 +63,10 @@ async function onCreate(): Promise<void> {
       title: draft.value.title.trim(),
       summary: draft.value.summary.trim() || undefined,
       submission_requires_login: draft.value.submission_requires_login,
-      // 空串表示"不限额"，不传该字段即走默认
-      max_submissions: draft.value.max_submissions === '' ? undefined : Number(draft.value.max_submissions),
-      // 同理，空串 = 不限。**不能写 Number('')** —— 那是 0，而下限是 1
-      max_per_submitter:
-        draft.value.max_per_submitter === ''
-          ? undefined
-          : Number(draft.value.max_per_submitter),
+      // null 表示"留空"，不传该字段即走默认。**不能写 Number('')** —— 那是 0
+      max_submissions: draft.value.max_submissions ?? undefined,
+      // 同理，null = 不限
+      max_per_submitter: draft.value.max_per_submitter ?? undefined,
       visibility: parseVisibility(draft.value.visibility),
     })
     showCreate.value = false
@@ -76,8 +75,8 @@ async function onCreate(): Promise<void> {
       title: '',
       summary: '',
       submission_requires_login: false,
-      max_submissions: '',
-      max_per_submitter: '',
+      max_submissions: null,
+      max_per_submitter: null,
       visibility: String(EVENT_VISIBILITY.PUBLIC),
     }
     await load()
@@ -158,37 +157,51 @@ onMounted(load)
 
       <div class="create__grid">
         <!--
-          复选框自成一行控件。裸的 <input type="checkbox"> 会被 .field input 的
-          width:100% 撑满整行，把标签文字挤到只剩几像素、疯狂折行。
+          开关自成一行控件。这里读的就是 `submission_requires_login` 本身（标题写"提交"，
+          下面的文字是"提交需要登录"），不需要反向 —— 与活动详情页不同，那里标题写的是
+          "是否允许匿名提交"，反转收在那一页的 computed 里。
         -->
         <div class="field">
           <span class="field__label">提交</span>
           <div class="toggle-row">
-            <Checkbox v-model="draft.submission_requires_login" label="提交需要登录" />
-            <span
-              class="toggle-row__text"
-              @click="draft.submission_requires_login = !draft.submission_requires_login"
-            >
-              提交需要登录
-            </span>
+            <Switch v-model="draft.submission_requires_login" label="提交需要登录" />
+            <span class="toggle-row__text">提交需要登录</span>
           </div>
         </div>
 
-        <label class="field">
-          <span class="field__label">条数上限<span class="dim">（留空取默认）</span></span>
-          <input v-model="draft.max_submissions" type="number" min="0" placeholder="4096" />
-        </label>
+        <!-- 用 `<div>` + 显式 for，不要用 `<label>` 包住 NumberInput（见组件的说明） -->
+        <div class="field">
+          <label class="field__label" for="event-max-submissions">
+            条数上限<span class="dim">（留空取默认）</span>
+          </label>
+          <NumberInput
+            id="event-max-submissions"
+            v-model="draft.max_submissions"
+            label="条数上限"
+            nullable
+            :min="0"
+            :null-base="4096"
+          />
+        </div>
 
-        <label class="field">
-          <span class="field__label">每人最多<span class="dim">（留空不限）</span></span>
-          <input v-model="draft.max_per_submitter" type="number" min="1" placeholder="1" />
-        </label>
+        <div class="field">
+          <label class="field__label" for="event-max-per-submitter">
+            每人最多<span class="dim">（留空不限）</span>
+          </label>
+          <NumberInput
+            id="event-max-per-submitter"
+            v-model="draft.max_per_submitter"
+            label="每人最多"
+            nullable
+            :min="1"
+          />
+        </div>
       </div>
 
       <!-- 限制的边界要写在界面上，否则管理员会以为它是硬限制 -->
       <p class="dim note">
         「每人最多」对<strong>匿名</strong>活动只能防误操作：匿名提交者的身份由
-        客户端自报，换一个浏览器即可绕过。要真正限制，请勾选上面的"提交需要登录"。
+        客户端自报，换一个浏览器即可绕过。要真正限制，请打开上面的"提交需要登录"。
       </p>
 
       <button class="btn btn--primary" type="submit" :disabled="busy">

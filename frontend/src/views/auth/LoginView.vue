@@ -44,7 +44,15 @@ async function onSubmit(): Promise<void> {
 
 <template>
   <main class="auth">
-    <form class="panel auth__card" @submit.prevent="onSubmit">
+    <form class="panel auth__card auth__card--closable" @submit.prevent="onSubmit">
+      <!--
+        关闭：回到首页。被守卫引到登录页的人（例如点进管理台）需要一个明确的"算了"，
+        否则只能靠浏览器后退 —— 而那是浏览器的事，不是这一页的出口。
+      -->
+      <RouterLink class="auth__close" :to="{ name: 'home' }" aria-label="关闭并返回首页">
+        ×
+      </RouterLink>
+
       <h1 class="auth__title">
         CEA<span class="dim">/</span><em>登录</em><span class="cursor" aria-hidden="true" />
       </h1>

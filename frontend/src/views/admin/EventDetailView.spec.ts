@@ -11,11 +11,12 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 
 const getAdminEvent = vi.fn()
 const listContent = vi.fn()
+const updateEvent = vi.fn()
 
 vi.mock('@/api/events', () => ({
   getAdminEvent: (...args: unknown[]) => getAdminEvent(...args),
   listContent: (...args: unknown[]) => listContent(...args),
-  updateEvent: vi.fn(),
+  updateEvent: (...args: unknown[]) => updateEvent(...args),
   deployContent: vi.fn(),
   deleteEvent: vi.fn(),
 }))
@@ -45,8 +46,8 @@ const EVENT = {
   updated_at: '2026-10-01T00:00:00Z',
 }
 
-async function mountView() {
-  getAdminEvent.mockResolvedValue(EVENT)
+async function mountView(overrides: Record<string, unknown> = {}) {
+  getAdminEvent.mockResolvedValue({ ...EVENT, ...overrides })
   listContent.mockResolvedValue({ files: [] })
 
   const router = createRouter({
@@ -77,6 +78,58 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+describe('匿名提交开关', () => {
+  /*
+    **界面写的是"允许匿名"，字段存的是"需要登录" —— 一对反向。**
+    这类错误从界面上很难发现：开关动了、保存也成功，语义却相反。所以两个方向都钉住。
+  */
+
+  it('事件要求登录时，开关是关的', async () => {
+    const { wrapper } = await mountView({ submission_requires_login: true })
+
+    const toggle = wrapper.find('input[role="switch"]')
+    expect(toggle.exists()).toBe(true)
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('事件允许匿名时，开关是开的', async () => {
+    const { wrapper } = await mountView({ submission_requires_login: false })
+
+    const toggle = wrapper.find('input[role="switch"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('打开开关 = 允许匿名 = 提交时不再要求登录', async () => {
+    updateEvent.mockResolvedValue({ ...EVENT, submission_requires_login: false })
+    const { wrapper } = await mountView({ submission_requires_login: true })
+
+    await wrapper.find('input[role="switch"]').trigger('click')
+    await wrapper.find('form').trigger('submit')
+
+    await vi.waitFor(() => expect(updateEvent).toHaveBeenCalled())
+    expect(updateEvent.mock.calls[0]![1]).toMatchObject({
+      submission_requires_login: false,
+    })
+    wrapper.unmount()
+  })
+
+  it('关掉开关 = 不允许匿名 = 提交时必须登录', async () => {
+    updateEvent.mockResolvedValue({ ...EVENT, submission_requires_login: true })
+    const { wrapper } = await mountView({ submission_requires_login: false })
+
+    await wrapper.find('input[role="switch"]').trigger('click')
+    await wrapper.find('form').trigger('submit')
+
+    await vi.waitFor(() => expect(updateEvent).toHaveBeenCalled())
+    expect(updateEvent.mock.calls[0]![1]).toMatchObject({
+      submission_requires_login: true,
+    })
+    wrapper.unmount()
+  })
 })
 
 describe('不再放提交列表', () => {
