@@ -12,7 +12,11 @@ from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.enums import EventStatus, EventVisibility
 from app.core.exceptions import Conflict, NotFound, ValidationFailed
-from app.core.text import entry_path_shape_error, event_id_shape_error
+from app.core.text import (
+    entry_path_shape_error,
+    event_id_shape_error,
+    normalize_event_id,
+)
 from app.db.models import Event, User
 from app.repositories.events import EventRepository
 from app.schemas.events import QuotaState
@@ -115,7 +119,13 @@ class EventService:
         visibility: str | None = None,
         owner: User | None = None,
     ) -> Event:
-        normalized_id = (event_id or "").strip()
+        # **先归一化、再校验、并用归一化后的值落盘。** 这三步的顺序不能换：
+        # 标识直接成为内容与数据目录名，若校验的是 A 而落盘的是 B，路径安全就退化成
+        # "依赖某个语言 lower() 的具体行为"。见 core/text.normalize_event_id。
+        #
+        # 归一化在 service 而不是路由：这里是唯一的写入口，放在这里才不存在第二条
+        # 绕过路径（标识来自请求体，不是路径参数，路由层的依赖也覆盖不到它）。
+        normalized_id = normalize_event_id(event_id)
 
         fields: dict[str, str] = {}
         if (problem := event_id_shape_error(normalized_id)) is not None:

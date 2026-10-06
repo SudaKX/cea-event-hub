@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import NotFound, PayloadTooLarge, ValidationFailed
+from app.core.text import normalize_event_id
 from app.repositories.events import EventRepository
 
 logger = logging.getLogger(__name__)
@@ -54,13 +55,21 @@ class ContentService:
 
     # ------------------------------------------------------------------
     # 路径
+    #
+    # **目录名一律取活动标识的规范形态。** 这两处是文件系统路径的咽喉：内容与数据
+    # 目录都从它们拼出来，而"同一个活动在不同大小写下必须落到同一个目录"这条约束
+    # 只有在这里做一次才可靠 —— 交给每个调用方自己记得归一化，漏掉一处的症状是
+    # "投放成功但页面上什么都没有"，与大小写这个起因看起来毫无关系。
+    #
+    # 大小写不敏感的文件系统（Windows / macOS）上，`Autumn` 与 `autumn` 本就是同一个
+    # 目录，而归一化让这个行为在 Linux 上也成立 —— 两个平台的差别因此消失。
     # ------------------------------------------------------------------
 
     def event_dir(self, event_id: str) -> Path:
-        return self.settings.CONTENT_DIR / event_id
+        return self.settings.CONTENT_DIR / normalize_event_id(event_id)
 
     def data_dir(self, event_id: str) -> Path:
-        return self.settings.DATA_DIR / event_id
+        return self.settings.DATA_DIR / normalize_event_id(event_id)
 
     def resolve_content_path(self, event_id: str, relative: str) -> Path | None:
         """把活动目录内的相对路径解析为绝对路径；越界时返回 None。

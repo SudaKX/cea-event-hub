@@ -73,7 +73,10 @@ class TestCreate:
         response = _create(admin_client)
         assert response.status_code == 409
 
-    @pytest.mark.parametrize("bad", ["Spring", "with space", "has.dot", "a", "-lead"])
+    # `"Spring"` 原本在这张表里，现在移出去了：大写不再是拒绝的理由，它会被归一化成
+    # 小写。替换它的 `"Spring.2026"` 同时含大写与点号 —— 被拒的原因是**点号**，
+    # 这一条因此顺带证明了"大写本身不再是问题"。
+    @pytest.mark.parametrize("bad", ["Spring.2026", "with space", "has.dot", "a", "-lead"])
     def test_invalid_event_id_is_rejected(self, admin_client, bad: str) -> None:
         response = _create(admin_client, event_id=bad)
         assert response.status_code == 422
@@ -473,3 +476,90 @@ class TestSubmissionWindow:
             )
             == "closed_at"
         )
+
+
+class TestCaseInsensitiveEventId:
+    """活动标识的大小写：规范形态是小写，解析不敏感。
+
+    见 openspec/changes/case-insensitive-event-ids/。这一组断言的价值在于**成对**：
+    只断言"大写能用"会被"其实两种写法都 404"这类实现骗过去，所以每条都同时给出
+    规范形态与大写形态的结果。
+    """
+
+    def test_created_with_uppercase_is_stored_lowercase(
+        self, admin_client, test_db
+    ) -> None:
+        """创建时接受大写，但存进去的是规范形态，且响应如实告知。"""
+        response = _create(admin_client, event_id="Autumn2026")
+
+        assert response.status_code == 201
+        assert response.json()["event"]["id"] == "autumn2026"
+        with test_db.session() as session:
+            assert session.get(Event, "autumn2026") is not None
+            # 存储里**不存在**大写形态：目录名与存储命名空间因此只有一种可能
+            assert session.get(Event, "Autumn2026") is None
+
+    def test_duplicate_detection_is_case_insensitive(self, admin_client) -> None:
+        """已占用 `autumn2026` 之后，用 `AUTUMN2026` 再建应当冲突。
+
+        这条是归一化最实际的收益：没有它，两个仅大小写不同的标识会同时存在，
+        而在大小写不敏感的文件系统上它们共用同一个内容目录。
+        """
+        assert _create(admin_client, event_id="autumn2026").status_code == 201
+
+        response = _create(admin_client, event_id="AUTUMN2026")
+
+        assert response.status_code == 409
+        assert _admin_event_ids(admin_client) == ["autumn2026"]
+
+    @pytest.mark.parametrize("variant", ["AUTUMN2026", "Autumn2026", "aUtUmN2026"])
+    def test_public_detail_accepts_any_case(
+        self, admin_client, test_db, variant: str
+    ) -> None:
+        _seed_event(test_db, event_id="autumn2026")
+
+        canonical = admin_client.get(f"{PUBLIC}/autumn2026")
+        variant_response = admin_client.get(f"{PUBLIC}/{variant}")
+
+        assert canonical.status_code == 200
+        assert variant_response.status_code == 200, variant
+        # 响应里一律是规范形态，调用方不必猜
+        assert variant_response.json()["event"]["id"] == "autumn2026"
+
+    def test_admin_endpoints_accept_any_case(self, admin_client, test_db) -> None:
+        _seed_event(test_db, event_id="autumn2026", status=EventStatus.DRAFT.value)
+
+        assert admin_client.get(f"{ADMIN}/AUTUMN2026").status_code == 200
+
+        patched = admin_client.patch(f"{ADMIN}/Autumn2026", json={"title": "改过了"})
+        assert patched.status_code == 200
+        assert patched.json()["event"]["id"] == "autumn2026"
+        assert patched.json()["event"]["title"] == "改过了"
+
+        assert admin_client.get(f"{ADMIN}/AUTUMN2026/content").status_code == 200
+        assert admin_client.delete(f"{ADMIN}/aUtUmN2026").status_code == 204
+
+    def test_service_lookup_is_case_insensitive(self, test_db) -> None:
+        """服务层的取用同样不敏感 —— 它是所有入口的共同下游。"""
+        _seed_event(test_db, event_id="autumn2026")
+        service = EventService(global_settings)
+
+        with test_db.session() as session:
+            for variant in ("autumn2026", "AUTUMN2026", "Autumn2026"):
+                assert service.get_public(session, variant).id == "autumn2026"
+
+    def test_case_does_not_leak_unpublished_events(
+        self, admin_client, test_db
+    ) -> None:
+        """大小写不敏感**不得**把"未发布"变成可见。
+
+        归一化只影响键的匹配方式，不影响状态判定 —— 这一条钉住那个边界。
+        """
+        _seed_event(test_db, event_id="autumn2026", status=EventStatus.DRAFT.value)
+
+        assert admin_client.get(f"{PUBLIC}/AUTUMN2026").status_code == 404
+
+    @pytest.mark.parametrize("variant", ["nosuch", "NOSUCH", "NoSuch"])
+    def test_unknown_id_is_404_regardless_of_case(self, admin_client, variant: str) -> None:
+        """大小写不改变错误语义：不存在就是 404，而不是 422 或 500。"""
+        assert admin_client.get(f"{PUBLIC}/{variant}").status_code == 404

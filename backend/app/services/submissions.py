@@ -307,6 +307,12 @@ class SubmissionService:
     # ------------------------------------------------------------------
 
     def list_for_event(self, session: Session, *, event_id: str, **filters) -> list[Submission]:
+        """某个活动的提交列表。
+
+        标识的归一化在**仓储**那一层（`SubmissionRepository.list_for_event`），因为管理端
+        会直接调用仓储、绕过这里。归一化写在上层就漏掉了那条路径，而漏掉的症状是
+        "空列表 + 200"，不是报错。
+        """
         return list(
             session.scalars(
                 self.submissions.list_for_event(session, event_id=event_id, **filters)

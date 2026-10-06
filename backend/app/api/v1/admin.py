@@ -33,6 +33,7 @@ from app.core.deps import (
 )
 from app.core.enums import PlatformSwitchKey
 from app.core.exceptions import BadRequest, NotFound
+from app.core.text import normalize_event_id
 from app.repositories import paginate
 from app.repositories.users import UserRepository
 from app.schemas.auth import (
@@ -300,7 +301,9 @@ def deploy_content(
         session, event_id=event_id, stream=file.file, size_bytes=_upload_size(file)
     )
     return ContentDeployResponse(
-        event_id=event_id,
+        # 回显也取规范形态：地址栏里可以写大写，但响应里的标识只有一种形态，
+        # 调用方（管理台）因此不必自己再归一化一次
+        event_id=normalize_event_id(event_id),
         file_count=result.file_count,
         total_bytes=result.total_bytes,
         content_version=result.content_version,
@@ -321,7 +324,7 @@ def list_content(
         raise NotFound("活动不存在")
 
     return ContentListResponse(
-        event_id=event_id,
+        event_id=normalize_event_id(event_id),
         content_version=event.content_version,
         entry_path=event.entry_path,
         files=[

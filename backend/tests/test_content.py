@@ -402,3 +402,79 @@ class TestDataDirectoryIsPrivate:
         mounted = {route.path for route in app.routes if hasattr(route, "path")}
         assert "/content" in mounted
         assert "/data" not in mounted
+
+
+class TestCaseInsensitiveEventId:
+    """活动标识的大小写对**文件系统**的影响。
+
+    见 openspec/changes/case-insensitive-event-ids/。这一组断言的是落盘形态：目录名
+    只能是规范形态。没有这条约束时，在大小写不敏感的文件系统（Windows / macOS）上
+    `Autumn2026` 与 `autumn2026` 会指向**同一个目录**，两个活动互相覆盖内容；而在
+    Linux 上是两个目录 —— 于是"本地正常、部署后行为不同"，且两侧都不报错。
+    """
+
+    def test_deploy_with_uppercase_lands_in_the_canonical_directory(
+        self, admin_client, test_db, content_root
+    ) -> None:
+        # 以大写的标识创建，再以**大写的 URL** 投放 —— 两处都走归一化
+        created = admin_client.post(
+            ADMIN, json={"id": "Autumn2026", "title": "秋季招新"}
+        )
+        assert created.status_code == 201
+
+        response = _deploy(
+            admin_client, "AUTUMN2026", _zip_bytes({"index.html": b"<h1>ok</h1>"})
+        )
+
+        assert response.status_code == 201
+        assert response.json()["event_id"] == "autumn2026"
+
+        # 断言**磁盘上实际存在的名字**，而不是 `Path("AUTUMN2026").exists()`：
+        # 后者在大小写不敏感的文件系统上恒为真，那样写出来的测试在 Windows 上等于没测
+        # —— 第一版就是这么写的，它"通过"了却什么也没证明。
+        names = sorted(entry.name for entry in global_settings.CONTENT_DIR.iterdir())
+        assert names == ["autumn2026"]
+        assert (
+            global_settings.CONTENT_DIR / "autumn2026" / "index.html"
+        ).read_bytes() == b"<h1>ok</h1>"
+
+    def test_data_directory_is_canonical(self) -> None:
+        """数据目录与内容目录必须用同一条规则，否则附件的落点会分叉。"""
+        from app.services.content import ContentService
+
+        service = ContentService(global_settings)
+
+        assert service.event_dir("AUTUMN2026") == service.event_dir("autumn2026")
+        assert service.data_dir("Autumn2026") == service.data_dir("autumn2026")
+        assert service.event_dir("AUTUMN2026").name == "autumn2026"
+        assert service.data_dir("AUTUMN2026").name == "autumn2026"
+
+    def test_content_listing_accepts_any_case(
+        self, admin_client, test_db, content_root
+    ) -> None:
+        _seed_event(test_db, event_id="autumn2026")
+        _write_content(content_root, "autumn2026", "index.html", b"<h1>hi</h1>")
+
+        response = admin_client.get(f"{ADMIN}/AUTUMN2026/content")
+
+        assert response.status_code == 200
+        assert response.json()["event_id"] == "autumn2026"
+        assert [item["path"] for item in response.json()["files"]] == ["index.html"]
+
+    def test_internal_path_resolution_is_canonical(self) -> None:
+        """内部解析（入口校验、清单）走规范形态。
+
+        注意**挂载出去的静态托管不走**这里：StaticFiles 直接挂在 `CONTENT_DIR` 上、
+        按目录名精确取，因此它的行为就是文件系统的行为 —— 在 Windows/macOS 上
+        `/content/AUTUMN2026/…` 照样取得到（实测如此），在 Linux 上是 404。
+
+        这个平台差异是既有事实，本变更不试图消除它。代价是**前端必须用接口返回的
+        规范标识去拼 iframe 地址**（见 design 决策 5），否则活动内容会在 Linux 上打不开。
+        """
+        from app.services.content import ContentService
+
+        service = ContentService(global_settings)
+
+        assert service.resolve_content_path(
+            "AUTUMN2026", "index.html"
+        ) == service.resolve_content_path("autumn2026", "index.html")

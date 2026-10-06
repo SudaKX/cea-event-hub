@@ -1095,5 +1095,68 @@ class TestMySubmissions:
         assert client.get(f"{API}/me/submissions").status_code == 401
 
 
+class TestCaseInsensitiveEventId:
+    """提交端点上活动标识的大小写。
+
+    见 openspec/changes/case-insensitive-event-ids/。这里的重点是**受理与筛选**：
+    标识若不被归一化，提交会被记到另一个键上、筛选会返回空集 —— 两者都不报错，
+    所以每一条都同时给出规范形态与混合大小写形态的结果作对照。
+    """
+
+    @pytest.mark.parametrize("variant", ["SPRING-2026", "Spring-2026", "sPrInG-2026"])
+    def test_submit_accepts_any_case(self, client, test_db, variant: str) -> None:
+        _seed_event(test_db)
+
+        assert _submit(client, event_id="spring-2026").status_code == 201
+        assert (
+            _submit(client, event_id=variant, client_id="another-browser").status_code
+            == 201
+        )
+
+        # 两条都落在**同一个**活动键下，而不是各自一个
+        with test_db.session() as session:
+            assert session.scalar(select(func.count()).select_from(Submission)) == 2
+            assert set(session.scalars(select(Submission.event_id)).all()) == {
+                "spring-2026"
+            }
+
+    def test_admin_submission_list_accepts_any_case(
+        self, admin_client, client, test_db
+    ) -> None:
+        """管理端提交列表**直接调用仓储**，是最容易漏掉的一条路径。
+
+        漏掉时它的表现是"空列表 + 200"，看起来像"这个活动还没人提交" ——
+        与 404 相比，这种错误没有任何提示。
+        """
+        _seed_event(test_db)
+        assert _submit(client, event_id="spring-2026").status_code == 201
+
+        canonical = admin_client.get(f"{ADMIN}/spring-2026/submissions")
+        variant = admin_client.get(f"{ADMIN}/SPRING-2026/submissions")
+
+        assert canonical.status_code == 200
+        assert canonical.json()["total"] == 1
+        assert variant.status_code == 200
+        assert variant.json()["total"] == 1
+
+    def test_my_submissions_filter_accepts_any_case(self, user_client, test_db) -> None:
+        """"我的提交"的可选活动筛选同样不敏感 —— 它是查询参数，不是路径。"""
+        _seed_event(test_db)
+        assert _submit(user_client, event_id="spring-2026").status_code == 201
+
+        canonical = user_client.get(f"{API}/me/submissions?event_id=spring-2026")
+        variant = user_client.get(f"{API}/me/submissions?event_id=SPRING-2026")
+
+        assert canonical.status_code == 200
+        assert len(canonical.json()["submissions"]) == 1
+        assert variant.status_code == 200
+        assert len(variant.json()["submissions"]) == 1
+
+    def test_submit_to_unknown_event_is_404_in_any_case(self, client, test_db) -> None:
+        """大小写不改变错误语义：不存在的活动一律 404。"""
+        assert _submit(client, event_id="nosuch").status_code == 404
+        assert _submit(client, event_id="NOSUCH").status_code == 404
+
+
 from app.db.models import User  # noqa: E402  （放在末尾以配合上面的夹具使用）
 from conftest import invitation_code_for

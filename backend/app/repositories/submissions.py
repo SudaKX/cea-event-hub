@@ -9,6 +9,7 @@ from sqlalchemy import Select, String, cast, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.text import normalize_event_id
 from app.db.models import Submission, SubmissionFile, SubmitterQuota
 
 #: LIKE 的转义符。反斜杠是 SQL 的惯例，SQLite 与 MySQL 都认。
@@ -212,6 +213,10 @@ class SubmissionRepository:
         created_to: datetime | None = None,
         payload_contains: str | None = None,
     ) -> Select:
+        # 标识来自 URL，因此在这里归一化。**不归一化的症状是"空列表"而不是 404** ——
+        # 筛选条件匹配不上任何行，接口照样返回 200。管理端的提交列表就是这条路径
+        # （它直接调用本方法，不经过 service）。
+        event_id = normalize_event_id(event_id)
         statement = (
             select(Submission)
             .where(Submission.event_id == event_id)
@@ -250,7 +255,10 @@ class SubmissionRepository:
             .order_by(Submission.created_at.desc(), Submission.id.desc())
         )
         if event_id is not None:
-            statement = statement.where(Submission.event_id == event_id)
+            # 可选筛选，来自查询参数 —— 同样归一化，否则会安静地筛出空集
+            statement = statement.where(
+                Submission.event_id == normalize_event_id(event_id)
+            )
         return statement
 
     def count_all(self, session: Session) -> int:

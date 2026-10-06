@@ -1,4 +1,14 @@
-"""活动的持久化。"""
+"""活动的持久化。
+
+**活动标识在本层是大小写不敏感的键。** 归一化集中在这里，而不是交给每个调用方各做
+一遍：本层每个以 `event_id` 为键的方法都是"这个键指向哪个活动"的操作，规则只写一遍
+才不会有第二个答案。service 层只管**写入**时的归一化（它是唯一的写入口），查询侧
+不再各自处理。
+
+`get` 尤其关键：它是所有存在性判断的唯一咽喉 —— service、内容服务，以及 API 层直接
+调用它的地方（管理端的详情与内容清单）都会经过它。标识本身来自 URL，所以"忘了归一化"
+的表现会是一个本该 200 的 404。
+"""
 
 from __future__ import annotations
 
@@ -6,12 +16,13 @@ from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.enums import EventVisibility
+from app.core.text import normalize_event_id
 from app.db.models import Event
 
 
 class EventRepository:
     def get(self, session: Session, event_id: str) -> Event | None:
-        return session.get(Event, event_id)
+        return session.get(Event, normalize_event_id(event_id))
 
     def add(self, session: Session, event: Event) -> Event:
         session.add(event)
@@ -61,6 +72,7 @@ class EventRepository:
         self, session: Session, event_id: str, *, limit: int
     ) -> bool:
         """尝试占用一个提交名额。返回 False 表示已达上限。"""
+        event_id = normalize_event_id(event_id)
         result = session.execute(
             update(Event)
             .where(Event.id == event_id, Event.submission_count < limit)
@@ -72,7 +84,7 @@ class EventRepository:
         """无上限时仍计数，供管理端展示已收条数。"""
         session.execute(
             update(Event)
-            .where(Event.id == event_id)
+            .where(Event.id == normalize_event_id(event_id))
             .values(submission_count=Event.submission_count + 1)
         )
 
@@ -85,7 +97,9 @@ class EventRepository:
         """
         session.execute(
             update(Event)
-            .where(Event.id == event_id, Event.submission_count > 0)
+            .where(
+                Event.id == normalize_event_id(event_id), Event.submission_count > 0
+            )
             .values(submission_count=Event.submission_count - 1)
         )
 
@@ -96,6 +110,7 @@ class EventRepository:
         """
         from app.db.models import Submission
 
+        event_id = normalize_event_id(event_id)
         actual = (
             session.scalar(
                 select(func.count())
@@ -110,6 +125,7 @@ class EventRepository:
         return actual
 
     def bump_content_version(self, session: Session, event_id: str) -> int:
+        event_id = normalize_event_id(event_id)
         session.execute(
             update(Event)
             .where(Event.id == event_id)
