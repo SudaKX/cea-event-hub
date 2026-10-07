@@ -42,6 +42,11 @@ backend/.env.*
 *.sqlite3
 *.sqlite3-journal
 
+# ---- 活动页构建产物 ----
+# 由 events/<活动>/npm run build 产出（混淆后的页面与投放 zip）。
+# 源码在 events/ 下入库，产物不入库 —— 与 frontend/public/sdk/ 同一条理由。
+/events/*/dist/
+
 # ---- 编辑器与系统 ----
 .DS_Store
 Thumbs.db

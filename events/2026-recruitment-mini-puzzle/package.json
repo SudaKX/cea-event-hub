@@ -1,0 +1,15 @@
+{
+  "name": "cea-event-2026-recruitment-mini-puzzle",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "终端解谜活动页：源码、单测、混淆构建与投放包",
+  "scripts": {
+    "test": "node --test \"tests/*.spec.mjs\"",
+    "build": "node tools/build.mjs",
+    "smoke": "node tools/smoke.mjs"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "^5.9.0"
+  }
+}
